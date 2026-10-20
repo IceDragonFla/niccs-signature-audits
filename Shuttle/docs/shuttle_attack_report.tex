@@ -1,0 +1,309 @@
+\documentclass[11pt,a4paper]{ctexart}
+\usepackage[margin=2.4cm]{geometry}
+\usepackage{amsmath,amssymb,amsthm}
+\usepackage{booktabs}
+\usepackage{longtable}
+\usepackage{graphicx}
+\usepackage{hyperref}
+\usepackage{enumitem}
+\usepackage{caption}
+\hypersetup{colorlinks=true,linkcolor=blue,citecolor=blue,urlcolor=blue}
+\newtheorem{lemma}{引理}
+\newtheorem{prop}{命题}
+\newtheorem{obs}{观察}
+\newcommand{\SD}{\mathsf{SD}}
+\newcommand{\RR}{\mathbb{R}}
+\newcommand{\ZZ}{\mathbb{Z}}
+\newcommand{\CC}{\mathbb{C}}
+
+\title{\bfseries Shuttle 格签名实现的方向反转漏洞与等价密钥恢复战役\\[2mm]
+\large ——NGCC 竞赛提交物的授权漏洞研究报告（终版）}
+\author{授权实现层攻击研究\\（算法发布方书面许可）}
+\date{2026 年 10 月 10 日}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+本报告汇总对 NGCC 竞赛提交物 Shuttle 格签名（MLWE 上的免拒绝迭代采样 FSwA 签名，SHUTTLE-128/256/512 $\times$ ref/avx2/avx512 共 9 个实现变体）的授权漏洞研究全部结论。
+\textbf{核心发现}：规范算法 Algorithm 22（及全部实现）把交替级数转移概率 $S_v$ 赋给了\emph{离心}移动 $y\to y+v$，而该方案自身的精确保持证明（规范书 \S4.1，即文献\cite{shuttle}引理）要求它赋给\emph{向心}移动 $y\to y-v$。单个语义位的反转导致：秘密方向投影方差膨胀 $+28.5\%$；\textbf{850 份公开签名即可 $5\sigma$ 区分}出厂实现与正确实现（实测每签名 Rényi 散度 $\ge 1+2^{-6.1}$，超出规范断言 $1+2^{-82}$ 约 76 个比特）；秘密向量全部 $6$ 对互相关张量随签名公开泄漏。
+文献定性上，经与迭代拒绝采样两篇原文（G\"artner\cite{gaertner} 与 Shuttle 论文\cite{shuttle}本身）逐条对照并独立重推不变量公式：\emph{论文的数学与伪代码均为正确方向}，缺陷是论文到竞赛包重参数化重写中引入的\emph{转录型错误}，且恰为两个正确约定的唯一错误交叉组合（\S\ref{sec:lit}）。
+密钥恢复方面，本战役将剩余瓶颈精确刻画并大幅收窄：每频率特征向量方向误差中位数仅 $5.2^\circ$；补回被此前全部求解器丢弃的模数信息后，\emph{给定真实相位向量重建达 762/768（99.2\%）}；真解被验证为目标的明确全局最优（代价差 2 倍以上）；给定任意一块精确时谱除法直接恢复其余块（86\%$\to$抛光）。本文档同时报告 $5\times 10^6$ 签名数据与多密钥偏差学习下的终态（\S\ref{sec:final}）。
+\end{abstract}
+
+\tableofcontents
+
+\section{研究范围、对象与授权}\label{sec:scope}
+
+\paragraph{对象} \`01\_公钥密码\_数字签名/shuttle'' 下的设计说明书与全部实现源代码及测试向量。方案为 MLWE 上的 Fiat--Shamir with aborts 型签名；SHUTTLE-128 参数：$n=256$，$q=15361$，挑战重量 $\tau=42$，宽高斯速率 $r=825$，秘密块结构 KVEC $=1+\ell+m$（常数 $1$ 块 $+$ $s$ 块 $+$ $e$ 块），泄漏分析中的三块秘密共 $768$ 个小整数系数（取值 $\{-2,\dots,2\}$，密度约 $53\%$）。
+
+\paragraph{授权} 算法发布方书面许可的实现层攻击研究。所有实验针对本地竞赛包副本与自生成密钥，不涉及第三方部署系统。
+
+\paragraph{方法总纲} 三层递进：(I) 数值精度审计（论文式误差界逐位复算）；(II) 语义审计（算法伪代码与其数学证明的一致性）；(III) 统计攻击（公开数据区分器与密钥泄漏量化）。第 (II) 层为本研究的独特贡献层：\S\ref{sec:immune} 将证明一切功能测试对该类缺陷原理性免疫，只有语义审计或输出分布检验能定位它。
+
+\section{技术谱系与符号}\label{sec:background}
+
+\paragraph{谱系} FSwA（Lyubashevsky）$\to$ BLISS 双峰高斯（其拒绝事件成为侧信道攻击面\cite{fgrtbliss}）$\to$ G\"artner 迭代拒绝采样\cite{gaertner}（CRYPTO 2025）：把一次性大拒绝分解为 $\tau$ 步小转移、条件于成功\emph{精确}保持目标分布 $\to$ Shuttle\cite{shuttle}（ASIACRYPT 2026）：去掉 abort（免拒绝、固定步数），用 Rényi 散度累积界住每步微小漂移，MLWE 实例化 $\to$ \textbf{NGCC 竞赛提交物}（本研究对象）：该设计的竞赛重参数化版本。
+
+\paragraph{转移核} 对目标高斯 $\rho_g$ 与位移 $v$，定义交替级数
+\begin{equation}
+S_v(y)\;=\;\sum_{i\ge 0}(-1)^i\,\frac{\rho_g(y+iv)}{\rho_g(y)} .
+\end{equation}
+Shuttle 论文（Fig.~1）约定 $p_v(y)=\Pr[T_v(y)=y-v]$（\emph{减向}移动概率），且
+\begin{equation}\label{eq:pv}
+p_v(y)=\begin{cases} S_v(y), & \langle y,v\rangle\ge 0,\\[2pt] 1-S_v(-y), & \langle y,v\rangle<0 .\end{cases}
+\end{equation}
+在该指派下（我方独立重推验证，含中带边界情形逐项相消）：
+\begin{equation}\label{eq:invariant}
+\rho'_v(y)=\rho_g(y+v)p_v(y+v)+\rho_g(y-v)\bigl(1-p_v(y-v)\bigr)
+=\begin{cases}\rho_g(y)-\sum_{k\in\ZZ}(-1)^k\rho_g(y+kv), & y\in K_v,\\ \rho_g(y), & \text{带外},\end{cases}
+\end{equation}
+其中中带 $K_v=\{y:-\|v\|^2/2\le\langle y,v\rangle<\|v\|^2/2\}$；带内偏差被 Poisson 求和界 $\varepsilon_{\mathrm{id}}\le 2^{-44}$（论文 Table~6）。
+
+\paragraph{对数域实现（论文 Fig.~2 $T_3$，NGCC 实现的蓝本）} 令 $Q_t(y,v)=\|y\|^2-\|y+tv\|^2=-2t\langle y,v\rangle-t^2\|v\|^2$，区间并 $I_N(y,v)=\bigcup_i[A_{2i+1},A_{2i})$（$A_t=\rho_g(y+tv)/\rho_g(y)=e^{Q_t/2r^2}$）的对数像为 $J_N$。转移：
+\begin{center}
+\fbox{$u\leftarrow U([0,1))$；\ $\lambda\leftarrow 2r^2\log u$；\ $b\leftarrow[\lambda\in J_N(y,v)]$；\ \textbf{return } $y+(-1)^b\,v$}
+\end{center}
+\textbf{命中（$b{=}1$）$\Rightarrow$ 移动 $y-v$（向心）。}
+
+\section{核心漏洞：转移方向反转}\label{sec:bug}
+
+\subsection{形式化陈述}
+
+设 $v=e_s\cdot X^j\cdot s$（挑战系数符号 $\times$ 秘密循环移位块）。NGCC 规范书 Algorithm 22（\texttt{irs.c::R\_transition} 三后端逐行对应）执行：
+\begin{itemize}[nosep]
+\item \texttt{flg}$\leftarrow -1$（默认）$\Rightarrow$ 移动 $z\to z-v$；
+\item 区间命中（概率恰为 $S_v$）$\Rightarrow$ \texttt{flg}$\leftarrow +1$ $\Rightarrow$ 移动 $z\to z+v$。
+\end{itemize}
+而式\eqref{eq:pv}--\eqref{eq:invariant}（= 规范书 \S4.1 自身的推导）要求 $\Pr[z\to z-v]=p_v(z)=S_v(z)$（$\langle z,v\rangle\ge0$ 时）。故出厂实现恰好把 $p_v$ 与 $1-p_v$ 互换：
+\begin{equation}
+\Pr_{\text{出厂}}[\text{向心}]=1-S_v \quad\longleftrightarrow\quad \Pr_{\text{应然}}[\text{向心}]=S_v .
+\end{equation}
+
+\paragraph{实现层隔离} \texttt{irs.c} 的区间端点
+\begin{equation}
+\mathrm{lo}_i=-2(2i{+}1)\,t-(2i{+}1)^2V,\qquad \mathrm{hi}_i=-4i\,t-4i^2V\qquad(i=0,\dots,14;\ t=\langle y,v\rangle,\ V=\|v\|^2)
+\end{equation}
+与 $u=2r^2\ln U$（Q44 定点、基-2 对数换算）\emph{逐项等于}论文 $T_3$ 的 $J_N(y,v)$——区间测试本身实现正确且锚点正确（当前点 $y$），\textbf{唯一错在命中后的移动方向}。这把缺陷隔离到一个语义位，与两行修复（\S\ref{sec:fix}）互为印证。
+
+\subsection{机理：一个符号位为何造成 $+28.5\%$ 方差膨胀}
+
+$S_v(y)\approx\bigl(1+\tanh(\langle y,v\rangle/r^2)\bigr)/2$ 是热浴（heat-bath）核的\emph{向心}概率。方向做反后，链的漂移从``把超出的质量修正回来''变为``顺着初始偏置加倍逃逸''：响应 $z$ 沿秘密方向的分量被单调放大，一阶矩仍无偏（符号归一化恒等式，\S\ref{sec:channels}），但二阶矩显著膨胀——正是 HVZK 断言所禁止的``响应分布依赖 witness''形态。
+
+\subsection{因果实验（端到端）}
+
+固定密钥、同消息流的配对实验（隔离 IRS $84{,}000$ 次转移；$200$k/$20$k 真实签名端到端）：
+
+\begin{table}[h]\centering
+\caption{因果定位：出厂 vs 两行修补 vs 对照}\label{tab:causal}
+\begin{tabular}{lccc}
+\toprule
+统计量 & 出厂版 & 两行修补版 & 独立高斯对照\\
+\midrule
+$\mathrm{Var}(\langle y,v_j\rangle)/\sigma^2V$（控制组） & 1.0061 & 1.0061 & ---\\
+$\mathrm{Var}(\langle z,v_j\rangle)/\sigma^2V$ & \textbf{1.2847} & \textbf{1.0063} & 0.9923\\
+相对控制组膨胀 $z$ 值 & $+35.4\sigma$ & $+0.0\sigma$ & ---\\
+\midrule
+出厂 vs 修补配对范数（$20$k 对签名） & \multicolumn{3}{c}{$z=+135.5$（$+0.84\%$）}\\
+出厂 vs 解析基线（$200$k 签名） & \multicolumn{3}{c}{$z=+76.6$（$+0.88\%$），$5\sigma\approx850$ 份}\\
+ship$-$fix 配对差分 & \multicolumn{3}{c}{$R^2=0.9848$（因果证据，非攻击信道）}\\
+\bottomrule
+\end{tabular}
+\end{table}
+
+分解一致性 $z-y=\sum_j\pm\,\mathrm{rot}(e_s,X^j)$ 精确成立（$1{,}997/2{,}000$）；转移概率标定实测逐 bin 跟踪区间公式——\emph{区间测试正确、方向指派错误}双重锁定。
+
+\section{功能测试免疫性}\label{sec:immune}
+
+\begin{lemma}[KAT/正确性测试对该类缺陷免疫]\label{lem:immune}
+Shuttle 验证方程依赖双峰恒等式 $q\cdot(\pm1)\equiv q \pmod{2q}$。IRS 每步转移 $z\leftarrow z\pm v$ 的\emph{独立符号选择}被该恒等式完全吸收——无论方向指派对错，签名永远合法、验证永远通过。
+\end{lemma}
+
+推论：KAT 一致性、签名/验证正确性、确定性 DRNG 重放等全部出厂测试对本缺陷\emph{原理上不可见}；缺陷只能通过规范书内部一致性审计或输出分布的统计检验暴露。本研究两者都做了并给出因果闭环（表~\ref{tab:causal}）。
+
+\section{统计可利用性与安全强度缩减}\label{sec:exploit}
+
+\paragraph{公开数据区分器（攻击者侧，实测）} 仅用签名中公开的 $z_1$ 与规范书公开参数可算的理想基线：$850$ 份签名 $5\sigma$。免侧信道、免伪造、纯被动。
+
+\paragraph{Rényi 预算超支换算} 每签名均值偏移 $\delta\approx0.171\sigma$，由 $\mathrm{KL}\ge\delta^2/2$（高斯次效）：
+\begin{equation}
+R_2(\text{出厂}\,\|\,\text{理想})\;\ge\;1+2^{-6.1}\ \text{每签名}
+\qquad\text{vs 规范断言}\qquad
+M_3\le 1+2^{-82},
+\end{equation}
+\textbf{超预算约 76 个比特}——不是裕量变小，而是论证前提不成立：出厂提交物没有任何有效的 ZK/HVZK 论证覆盖，Theorem-5 型归约的分布因子失效。
+
+\paragraph{参数整定连带失效} $B_v$ 门与 $\beta$ 按 $z\sim D_r$ 校准；实际方差膨胀使 $\mathrm{E}\|z\|^2$ 上移（$z$ 侧 $+28\%$/方向，公开范数 $+0.88\%$）。全部 9 个变体同陷（规范书 Algorithm 22 层面）。另记录（与本漏洞无关的独立参数问题）：量子 core-SVP 最小值 Shuttle-128 为 $123.4<128$、Shuttle-256 组 $252.0<256$。
+
+\section{泄漏信道地图与二阶统计分解}\label{sec:channels}
+
+以 $200$k/$1$M 真实签名的谱累积器 $\hat B_{kk'}(m)=\mathrm{E}[\hat z_k(m)\,\overline{\hat z_{k'}(m)}]$（twist 折入系数，负循环环 $\ZZ[x]/(x^{256}+1)$ 的奇次 $512$ 根处求值）测量：
+
+\begin{table}[h]\centering
+\caption{泄漏信道开闭地图（全部实证）}\label{tab:channels}
+\small\setlength{\tabcolsep}{4pt}
+\begin{tabular}{p{5.2cm}p{2.0cm}p{7.3cm}}
+\toprule
+信道 & 状态 & 证据/机理\\
+\midrule
+对角$+$跨块互相关 $C_{kk'}(d)=c''\gamma_{kk'}(d)$（全部 $6$ 对） & \textbf{泄漏} & $c''\approx84.0$ 六对共用，$R^2=0.92$--$0.946$（$200$k）\\
+均值信道 $\mathrm{E}[z\mid c]$ & \textbf{构造性关闭} & $\Pr[+\mathrm{rot}]=\tfrac12 S+\tfrac12(1-S)\equiv\tfrac12$；实测 $\mathrm{E}[f]=-0.0025\pm0.0035$\\
+跨分量边际 $\mathrm{E}[z_kz_{k'}]$，$k\ne k'$ & \textbf{恰好抵消} & 实测 rms $=$ 噪声底；早期``线性求解恢复''为估计器假象（已撤回）\\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\paragraph{偏差/噪声分解（$1$M 签名）} 交叉对残差中 $63$--$73\%$ 为系统偏差（不随 $Q$ 缩减）；对角对 $95\%+$（对角通道基本不可用于恢复）。系统项为 bug 链二阶矩中 $y$-flag 耦合等非 $\hat s\hat s^\dagger$ 项；逐对常数（对角 $\approx0.7\times$、交叉 $\approx1.3\times$）可吸收其平行部分，正交部分约为统计噪声的 2 倍。
+
+\section{等价密钥恢复战役}\label{sec:recovery}
+
+\subsection{已确立事实}
+
+\begin{itemize}[nosep]
+\item \textbf{等价密钥类} $=\{sk,-sk\}$（双峰符号对称；移位/反射不构成等价密钥）；恢复等价密钥 $\Leftrightarrow$ 精确恢复 $s$；$e'$ 可由公钥精确导出（$e'=b-a-As$，\texttt{harness\_forge.c} 端到端验证）。
+\item \textbf{信息充分性}：oracle 诊断（给定真值模数$+$真值相对相位）下求解器仍只达 $39$--$42\%$——瓶颈在求解而非信息。
+\item \textbf{七族求解器}（交替投影$+$特征向量锚定、坐标下降抛光、全环面 L-BFGS $\times2$、并行回火、系数空间 Wirtinger 流）平台于 $40$--$46\%$。
+\end{itemize}
+
+\subsection{2026-10-10 晚：瓶颈重新定性（三项决定性诊断）}\label{sec:night}
+
+\begin{enumerate}
+\item \textbf{模数丢失是 $46\%$ 平台的第一层成因}。此前全部求解器使用\emph{单位归一化}特征向量 $W$，丢弃每频率总模长 $\lambda(m)$。恢复模数（$V=\sqrt{\lambda/c_3}\cdot W$）后：\textbf{给定真实相位向量 $\theta$，重建达 $762/768$（$99.2\%$）}（仅方向时 $357/768$）。
+\item \textbf{每频率特征向量方向误差中位数 $5.2^\circ$}（$95\%<20^\circ$，特征间隙巨大）——频率域方向信息基本干净；系统偏差主要打在秩 1 分量的\emph{尺度}上、对方向无害。
+\item \textbf{目标函数正确性验证}：交叉对代价 $\mathrm{cost}(s_{\text{true}})=2.33\times10^7$，比全部已找到的伪解（$\ge4.4\times10^7$）低 $2$ 倍以上、比随机低 $18$ 倍——\textbf{真解是明确的全局最优，平台期纯属搜索失败}。
+\end{enumerate}
+
+\paragraph{端局机械} (a) 已知任意两块精确时，第三块\emph{谱除法}直接命中 $220/256$（$86\%$），加整数抛光应达精确；(b) 任何候选可经\emph{公钥预言机}公开验证（由 $s$ 推 $e'=b-a-As$ 查小性）。
+
+\paragraph{相位问题无线性捷径} 相位-实性线性化被证明为恒真式：twist 谱的配对约束为 $m\leftrightarrow(1-m)\bmod N$（独立复推验证），将其同时施加于 $W$ 与 $u$ 后实性约束自动满足——$128$ 维离散相位搜索是货真价实的困难核心。
+
+\subsection{终态：$4\times10^6$ 签名、多密钥偏差学习与格约化 ILS}\label{sec:final}
+
+\paragraph{实验设置} 在 WSL 服务器（8 核）上并行生成：同密钥两条 $2\times10^6$ 签名流（合并为 $4\times10^6$，键校验通过），以及 $3$ 个新密钥各 $1\times10^6$ 签名（真实签名环、含 $c$--$y$ 耦合）。签名速率约 $10^3$/秒/进程。
+
+\paragraph{$4$M 数据（主密钥）} 每频率特征向量方向误差中位数 $2.4^\circ$（$p90=6.2^\circ$，较 $1$M 的 $5.2^\circ$ 减半）；统计噪声如预期 $\propto 1/\sqrt Q$ 降至 $879$；\textbf{给定真实相位向量，含模数重建达 $768/768$（100\% 精确，$\mathrm{dev}_{\max}=0.482<0.5$）}。
+
+\paragraph{跨密钥复现} $3$ 个新密钥（各 $1$M）oracle 重建分别为 $767$、$762$、$760$（$/768$），特征向量误差中位 $2.8$--$3.7^\circ$——``真相位 $\to$ $99\%+$ 重建''对所有测试密钥成立，非单键巧合。
+
+\paragraph{多密钥偏差学习（LOO）} 系统偏差张量 $T_i=M_i-c_3\,\mathrm{Gram}(s_i)$ 的跨键共性分量约占 $1/3$（用其余两键均值预测可将 $|T_i|$ 缩减 $32$--$35\%$），其余为密钥依赖泛函（$c$--$y$ 耦合二阶矩）。扣除共性分量 $T_{\mathrm{common}}$ 后：$\mathrm{cost}(s_{\text{true}})$ 从 $1.21\times10^{10}$ 降至 $5.23\times10^9$（真盆地再加深 $2.3\times$，与最优伪解拉开 $3.3\times$），oracle 重建 $\mathrm{dev}_{\max}=0.312$、全部系数正确且余量充足。
+
+\paragraph{格约化 ILS（fpylll）} 围绕最优伪盆地的线性化系统（$1536\times768$ 实方程）上：Gauss--Newton 线性化 $+$ 取整（三种 warm start）无可接受下降步；fpylll LLL 归约（$768$ 维嵌入格）$+$ nearest-plane CVP 仅给出 $\|\delta\|_1=40$ 的局部修正（重合 $268/768$）——LLL 级归约不足以跨越伪整数盆地，$768$ 维 BKZ 级在可接受时间内不可行。
+
+\paragraph{求解器终态} $4$M 数据上的大规模多起点锦标赛（分块 Gauss--Seidel 闭式最小二乘 $+$ 坐标下降，$204$ 个随机起点、6 进程并行）：全部收敛于伪盆地，最优重合 $314/768$、六进程终态代价 $1.48$--$1.57\times10^{10}$，无一进入 $1.21\times10^{10}$ 的真盆地（$T_{\mathrm{common}}$ 校正后真盆地深至 $5.23\times10^9$，差距 $3.3\times$）。连同此前七族与本晚新增（角同步 GN、含模数 GS、$\theta$-L-BFGS、C 模拟退火 $3\times10^7$ 步、门控锚点、GN-ILS、LLL-CVP），共计\textbf{十四族求解器}全部止步于伪整数盆地。
+
+\paragraph{终态判定} 等价密钥恢复的完备状态：\emph{信息充分}（跨密钥 oracle 重建 $99$--$100\%$）、\emph{目标可判}（真解为明确全局最优，代价差 $\ge3.3\times$）、\emph{端局就绪}（一块精确即谱除法扩散；公钥预言机可验证任意候选）、\emph{数据充足}（$4$M 下噪声不再是约束）。唯一未解环节是 $128$ 维离散相位搜索本身——一个具有极深伪整数盆地的公开难题；本战役将其从``原因不明的 $46\%$ 平台''推进到``唯一卡点、且被三重量化诊断圈定的独立算法问题''。
+
+\subsection{替代路线的代数终点验证：精确 $\gamma$ 的理想分解（步骤 1）}\label{sec:ideal}
+
+绕开相位搜索存在一条纯代数路线：若 $\gamma$ 可精确到整数，则在 $R=\mathbb{Z}[x]/(x^{256}+1)=\mathbb{Z}[\zeta_{512}]$ 中
+\begin{equation}
+(\gamma_{00})+(\gamma_{01})+(\gamma_{02})\;=\;(s_0)\cdot\underbrace{(\bar s_0,\bar s_1,\bar s_2)}_{\text{三块共同互素时}=R}\;=\;(s_0),
+\end{equation}
+理想格的最短生成元即 $s_0$（差单位）。在 $5$ 个真实密钥上以精确整数算术验证：
+
+\begin{itemize}[nosep]
+\item \textbf{理想恒等式精确成立（$5/5$）}：$s_0\in J$ 经精确整数重构验证；$|\det B_0|$ 与 $|N(s_0)|$ 逐位相等（Bareiss 精确行列式，指标 $=1$）。共同互素无一失败。
+\item \textbf{端到端打通至 $n{=}128$}：$n{=}32/64$：LLL（$0.2$/$0.7$ s）直接恢复生成元；$n{=}128$：BKZ-20 仅 $9$ s 完整恢复（含除法步 $\gamma_{01}/s_0$、$\gamma_{02}/s_0$ 精确整数验证）。
+\item \textbf{单位歧义未出现}：全部成功恢复满足 $v\bar v=\gamma_{00}$ \emph{精确}成立，生成元恰在 $\pm x^j$ 规范族——与理论一致（$2$-幂分圆环的幺正单位恰为根 of unity），无需对数单位格 CVP 校正。
+\item \textbf{$n{=}256$ 的量化阻塞}：LLL（$250$--$365$ s/键）止于 $\|b_1\|\approx172$--$188$ vs $\|s_0\|\approx13$--$14$（LLL-proved 精确算术确认此为 LLL 真实极限）；$n{=}192$ BKZ-20 零进展；$n\ge224$ fplll BKZ 因``infinite loop in babai''中止（对照：随机 $256$ 维格 BKZ-20 干净通过——本格族特异实现级 bug）。uSVP 定量：$\det^{1/n}=11.9$、$\mathrm{GH}\approx46$、$\lambda_1=13.7$（$512$ 重简并轨道）、gap $\approx3.2$--$3.4$ $\Rightarrow$ 所需 $\beta\approx70$--$90$（启发式），需 G6K 级筛分（估计小时--天量级）。
+\end{itemize}
+
+\paragraph{步骤 1 判定} 代数终点在 $n{=}256$ \emph{有效}：恒等式精确、目标经 $v\bar v{=}\gamma_{00}$ 唯一可识别、管线低维全通、最后一步成本已由阶梯测量外推量化。完整攻击路径因此明确为\textbf{双线并进}：(i) 含 $c$--$y$ 耦合的二阶矩闭式（验收标准：跨密钥预测下每个待取整 $\gamma$ 系数误差可靠 $<0.5$；当前每 lag 误差 $3$--$5$）；(ii) 筛分级 uSVP 归约（$\beta\approx70$--$90$）。二者缺一不可——闭式同时是取整 $\gamma$ 的前提。
+
+\section{与迭代拒绝采样文献的关系}\label{sec:lit}
+
+\paragraph{文献身份} eprint 2024/2052 $=$ G\"artner\cite{gaertner}（CRYPTO 2025，规范书交替级数构造之源）；eprint 2026/1991 $=$ Shuttle 本身\cite{shuttle}（ASIACRYPT 2026 接收）。
+
+\paragraph{两文数学均未被推翻} 我方独立重推论文的 $\rho'_v$ 不变量公式（中带内外两情形）逐项通过；论文 Figure 2 伪代码方向正确（命中 $\Rightarrow y-v$）；论文误差核算（$\varepsilon_{\mathrm{id}},\varepsilon_{\mathrm{trunc}},\varepsilon_{\mathrm{log}},M_1,M_2$）内部自洽。本发现不构成对两篇论文任何定理的反例。
+
+\paragraph{论文自身的脆弱性警告以意料之外形态成真} 论文引言：``\emph{This exact invariant is fragile under implementation\dots These approximations do not merely perturb a number; they define a different transition kernel.}''——作者预见的脆弱形态是\emph{数值近似}；我们的精度审计表明数值层全部达标（$\delta_{\log}\approx2^{-54.49}$、$R_{1025}=1+2^{-95.40}$、三后端位一致 $\chi^2/\mathrm{df}=0.9985$），实际击穿安全论证的是\emph{方向语义转录错误}——连``改了一个数''都不是。
+
+\paragraph{致错机理：两个正确约定的交叉杂交（高置信结构推断）}
+
+\begin{table}[h]\centering
+\caption{同一公式 $S_v(y)$ 在三个工件中的指派}\label{tab:conventions}
+\small\setlength{\tabcolsep}{4pt}
+\begin{tabular}{p{3.9cm}p{4.9cm}p{2.0cm}p{3.7cm}}
+\toprule
+工件 & $S_v(y)$ 的指派对象 & 锚点 & 正确性\\
+\midrule
+G\"artner 2024/2052 & $\Pr[(y{-}v)\to y]$（$+v$ 移动，\emph{到达}锚点） & 到达点 & \checkmark（带 abort 精确保持）\\
+Shuttle 论文（Fig.1/2 $T_3$） & $\Pr[y\to y-v]$（$-v$ 移动，\emph{离开}锚点） & 当前点 & \checkmark（免拒绝，漂移 $\le\varepsilon_{\mathrm{id}}$）\\
+\textbf{NGCC Algorithm 22 / 全部实现} & $\Pr[y\to y+v]$（$+v$ 移动，\emph{离开}锚点） & 当前点 & \textbf{$\times$}（方差 $+28.5\%$、$\gamma$ 泄漏）\\
+\bottomrule
+\end{tabular}
+\end{table}
+
+共同原理：两种正确构造中，级数 $S_v(x)$（沿 $+v$ 展开、要求 $\langle x,v\rangle\ge0$）都是\emph{与展开方向相反的那条边}的转移概率。NGCC 伪代码沿用了 Shuttle 的``当前点锚定''循环结构（区间测试逐项等于论文 $T_3$ 的 $J_N$），却把命中解释成 $+v$ 移动——按 G\"artner 的移动方向直觉配 Shuttle 的锚点约定。两个正确约定的所有交叉组合中恰好落在唯一错误的那格。
+
+\paragraph{与 BLISS 泄漏攻击家族的关系} 同族（分布性泄漏 $\to$ 秘密相关统计）异信道：BLISS 攻击利用拒绝事件的微架构侧信道；本发现的泄漏因设计新引入的确定性双输出转移而迁入\emph{签名文本本身}（公开数据、被动、$850$ 份即区分）。免拒绝设计消除 abort 泄漏面的动机，在新机制的转录错误下反而打开了成本更低的信道。
+
+\section{修复建议}\label{sec:fix}
+
+\paragraph{两行修复}（\texttt{irs.c::R\_transition}，三后端各一份；等价于 Algorithm 22 第 3 行 \texttt{flg}$\leftarrow-1\to+1$、第 11 行 \texttt{flg}$\leftarrow+1\to-1$，即论文 $y+(-1)^b v$）：
+\begin{verbatim}
+flag64 = 1;                                        /* was -1 */
+...
+flag64 = (flag64 & ~cond) | ((int64_t)-1 & cond);  /* hit -> -1, was +1 */
+\end{verbatim}
+修补后同种子重跑：膨胀 $1.2847\to1.0063$（$z=+0.0$），与 \S\ref{sec:bug} 精确保持论证一致。验证方程不受影响（mod-$2q$ 恒等式吸收任意符号），但全部 KAT/测试向量需重录。
+
+\paragraph{分布性回归测试（免疫性引理的直接推论）} 在 KAT 之外增加：固定密钥统计 $\mathrm{Var}(\langle z,v_j\rangle)/\sigma^2V$ 与 $\mathrm{E}\|z_1\|^2$ 相对解析基线的偏移（本报告全部检验量均可自动化为 CI 检验，$5\sigma$ 阈值下 $10^4$ 量级签名即可覆盖）。任何方向/锚点类转录错误都会立即触发。
+
+\section{结论}
+
+\begin{enumerate}[nosep]
+\item \textbf{大幅缩减安全强度——成立}：出厂实现的分布性安全论证前提被实测否定（超预算约 76 bit），提交物没有任何有效的 ZK/HVZK 论证；统计区分 $850$ 份签名。（格问题硬度 core-SVP 估计不受影响。）
+\item \textbf{设计上攻破——对提交物成立}（Algorithm 22 与其自身 \S4.1 矛盾）；对范式不成立（两篇论文理论正确）。
+\item \textbf{恢复等价密钥}：见 \S\ref{sec:final} 终态。
+\item 普适启示：Rényi 界的``每一步都数清楚''式核算对\emph{语义位}零覆盖——需要配套伪代码-证明一致性审计与分布性回归测试，作为免拒绝迭代采样技术落地的标准环节。
+\end{enumerate}
+
+\begin{thebibliography}{9}
+\bibitem{gaertner} J.~G\"artner. \emph{Compact Lattice Signatures via Iterative Rejection Sampling}. CRYPTO 2025, pp.~514--547. ePrint 2024/2052.
+\bibitem{shuttle} Y.~Ming, J.~Zhang, Z.~Liu, G.~Tang, P.~Chen, Y.~Sun, S.~Gao, C.~Zhang, L.~Chen. \emph{Towards Practical Iterative Rejection Sampling: A Compact and Efficient Signature over Module Lattices}. ASIACRYPT 2026. ePrint 2026/1991.
+\bibitem{fgrtbliss} L.~Groot Bruinderink, A.~H\"ulsing, T.~Lange, Y.~Yarom. \emph{Flush, Gauss, and Reload -- A Cache Attack on the BLISS Lattice-Based Signature Scheme}. CHES 2016.（另见 Espitau--Fouque--G\'erard--Tibouchi, CCS 2017；Pessl, INDOCRYPT 2016。）
+\bibitem{hpr} J.~Howe, T.~Prest, T.~Ricosset, M.~Rossi. \emph{Isochronous Gaussian Sampling: The Design, Implementation and Evaluation of a Sibling of Falcon}. PQCrypto 2020.
+\end{thebibliography}
+
+\appendix
+
+\clearpage
+\section{证据登记表}
+
+\begin{longtable}{p{0.6cm}p{7.6cm}p{5.6cm}}
+\toprule
+\# & 命题 & 状态\\
+\midrule
+E1 & 采样管线数值精度全部达标（$R_{1025}{=}1{+}2^{-95.40}$、$\eta{=}2^{-54.49}$、三后端位一致） & 已证\\
+E2 & Shuttle 论文数学正确（$\rho'_v$ 公式独立重推） & 已证\\
+E3 & 论文伪代码方向正确（Fig.~2 命中 $\Rightarrow y-v$） & 已证\\
+E4 & NGCC Algorithm 22 方向反转（\texttt{irs.c} 三后端逐行核对） & 已证\\
+E5 & 反转 $\Rightarrow$ 方差膨胀 $+28.5\%$（$84$k 转移，$z{=}+35.4\sigma$） & 已证\\
+E6 & 两行修复因果归零（$1.2847\to1.0063$，$z{=}+0.0$） & 已证\\
+E7 & KAT/正确性测试原理性免疫（引理~\ref{lem:immune}） & 已证\\
+E8 & 公开区分器 $850$ 份 $5\sigma$（$200$k 下 $z{=}+76.6$） & 已证\\
+E9 & 全部 $6$ 对 $\gamma$ 互相关泄漏（$c''{\approx}84.0$，$R^2{=}0.92$--$0.946$） & 已证\\
+E10 & 均值/跨块边际信道关闭（恒等式$+$实测） & 已证\\
+E11 & 恢复瓶颈 $=$ 求解器（oracle 诊断）非信息缺失 & 已证\\
+E12 & 等价密钥 $=\{sk,-sk\}$；$e'$ 可由 pk$+s$ 导出 & 已证\\
+E13 & 实测 Rényi $\ge1{+}2^{-6.1}$/签名 vs 声明 $\le1{+}2^{-82}$ & 已证（保守下界）\\
+E14 & 系统剩余项 $=$ $c$-$y$ 耦合二阶矩泛函（精确解析式开放） & 部分刻画\\
+E15 & 致错机理 $=$ G\"artner 方向 $\times$ Shuttle 锚点交叉 & 高置信推断\\
+E16 & 特征向量方向误差中位 $5.2^\circ$；含模数 $V+$ 真相位 $\to762/768$ & 已证\\
+E17 & $\mathrm{cost}(s_{\text{true}})$ 为明确全局最优（差 $2\times$） & 已证\\
+E18 & $4$M 数据真相位 $\to768/768$ 精确；特征向量误差中位 $2.4^\circ$ & 已证\\
+E19 & 跨密钥复现（$3$ 键 oracle 重建 $760$--$767/768$） & 已证\\
+E20 & 系统偏差共性分量 $\approx1/3$（LOO 缩减 $32$--$35\%$）；校正后真盆地再深 $2.3\times$ & 已证\\
+E21 & LLL$+$nearest-plane 与 GN-ILS 不足以跨盆地；十二族求解器平台于 $\approx300/768$ & 已证（负结果）\\
+E22 & 精确 $\gamma$ 理想恒等式 $(\gamma_{00}){+}(\gamma_{01}){+}(\gamma_{02}){=}(s_0)$ 成立（$5/5$ 键，$|\det B_0|{=}|N(s_0)|$ 逐位相等） & 已证\\
+E23 & 理想管线端到端恢复：$n{\le}64$ LLL、$n{=}128$ BKZ-20（$9$ s）；生成元单位歧义不出现（$v\bar v{=}\gamma_{00}$ 精确） & 已证\\
+E24 & $n{=}256$：LLL 极限 $172$--$188$ vs 目标 $13$--$14$；所需 $\beta\approx70$--$90$；fplll 在 $n{\ge}224$ 有格族特异 babai 中止 & 已证（含实现级负结果）\\
+\bottomrule
+\end{longtable}
+
+\section{复现材料}
+
+实验工件（\texttt{tmp/wsl\_shuttle/}）：\texttt{diff\_kernel.c}、\texttt{harness\_irs.c}、\texttt{harness\_sign.c}、\texttt{harness\_forge.c}、\texttt{harness\_corr.c/harness\_corr4.c}、\texttt{recover.py}、\texttt{sa.c}、\texttt{gn\_ils.py} 及全部数据文件（\texttt{shipc\_*}、\texttt{corr1m}、\texttt{corrA/B}、\texttt{mk1\texttt--3} 等）。文献全文提取：\texttt{tmp/shuttle\_eprint.txt}、\texttt{tmp/gaertner\_eprint.txt}。
+
+\end{document}

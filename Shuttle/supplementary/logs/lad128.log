@@ -1,0 +1,2 @@
+n=128 LLL 4.9s ||b1||=80.4 ||s0||=10.10 found=False
+  n=128 BKZ-20 (9s): ||b1||=10.1 found=True

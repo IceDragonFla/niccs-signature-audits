@@ -1,0 +1,12 @@
+LLL done 319.5s
+after LLL: ||b1||=172.5  found=False
+terminate called after throwing an instance of 'std::runtime_error'
+  what():  infinite loop in babai
+BKZ-20 interrupted (RuntimeError('Aborted')), using current basis
+BKZ-20 (5.6s): ||b1||=172.5  found=False
+terminate called recursively
+BKZ-30 interrupted (RuntimeError('Aborted')), using current basis
+BKZ-30 (2.3s): ||b1||=172.5  found=False
+terminate called recursively
+BKZ-40 interrupted (RuntimeError('Aborted')), using current basis
+BKZ-40 (105.0s): ||b1||=172.5  found=False

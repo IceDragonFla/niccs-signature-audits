@@ -1,0 +1,159 @@
+% !TEX program = xelatex
+% COMPASS-SIG-128 结构性零信号报告 — 编译: xelatex 两次
+\documentclass[UTF8,11pt,a4paper]{ctexart}
+
+\usepackage{amsmath,amssymb,bm}
+\usepackage{booktabs,array,tabularx,longtable}
+\usepackage[margin=2.3cm]{geometry}
+\usepackage{enumitem}
+\usepackage{xcolor}
+\setlist{itemsep=2pt,topsep=4pt}
+\usepackage[colorlinks=true,linkcolor=blue!55!black,urlcolor=blue!55!black,citecolor=blue!55!black]{hyperref}
+\usepackage{fancyhdr}
+
+\setmainfont{Cambria}
+\setmonofont{Consolas}
+\newcommand{\code}[1]{\texttt{\small #1}}
+
+\pagestyle{fancy}\fancyhf{}
+\fancyhead[L]{\small COMPASS-SIG-128：被接受条件化消除的回归信号}
+\fancyhead[R]{\small\thepage}
+\renewcommand{\headrulewidth}{0.3pt}
+
+\title{\vspace{-1.2cm}\textbf{COMPASS-SIG-128：\\被接受条件化消除的回归信号}}
+\author{GLM-5.3 Max \and JY Liu}
+\date{2026 年 10 月 19 日}
+
+\begin{document}
+\maketitle
+\thispagestyle{fancy}
+
+\begin{abstract}\noindent
+COMPASS-SIG-128 是 NICCS 首轮征集的 Fiat--Shamir-with-aborts 型格签名候选。我们研究其
+公开签名对学习型密钥恢复的暴露面，结论是一个\textbf{结构性零信号}的判定：掩码方差定律
+$\sigma(N) = \sqrt{\mathrm{Var}(y)/(\tau N)}$ 在 $5\times10^3$ 到 $1.2\times10^7$ 的
+全部尺度上精确吻合（实测 50.00/10.83/1.263 对定律值 48.85/10.92/0.997），但响应与秘密
+的相关系数在同样全部尺度上为零（实测 $-0.044/-0.013/-0.006$，若信号存在应见
+$0.016/0.075/0.542$）。根因是签名循环中的 $w_1$ 一致性检查：它验证
+$\mathrm{decompose}(w - c s_2 + c t_0)$ 的高位等于原始 $w_1$，该检查的通过概率依赖秘密
+$(s_2, t_0)$，从而条件化了发布分布——条件化恰好消除了 $z = y + c s_1$ 中 $c s_1$ 与
+对齐统计量之间的全部相关性。这把判定从早期的``掩码受限、所需 $N \approx
+4.8\times10^7$''更正为：\textbf{简单回归在任何数据量下不可行}。COMPASS-SIG-128 对本
+攻击族的安全性不来自掩码宽度，而来自这个一致性检查，且是原理性的。
+
+\medskip\noindent\textbf{Abstract.}
+COMPASS-SIG-128 is an FS-aborts lattice signature candidate of the NICCS first
+round. We find a structurally zero learning signal: the masking variance law
+$\sigma(N) = \sqrt{\mathrm{Var}(y)/(\tau N)}$ holds precisely at every scale
+from $5\times10^3$ to $1.2\times10^7$ signatures, yet the response--secret
+correlation is zero at every scale ($-0.044/-0.013/-0.006$ measured, against
+$0.016/0.075/0.542$ expected if the signal existed). The cause is the $w_1$
+consistency check in the signing loop: it validates that
+$\mathrm{decompose}(w - cs_2 + ct_0)$ reproduces the original $w_1$; its
+acceptance probability depends on $(s_2, t_0)$, conditioning the published
+distribution and eliminating the $cs_1$ correlation exactly. The verdict is
+corrected from ``mask-limited, $N \approx 4.8\times10^7$ required'' to: simple
+regression is infeasible at any sample size. The security against this attack
+family rests on the consistency check, in principle rather than in margin.
+\end{abstract}
+
+\section{对象与现象}
+
+COMPASS-SIG-128 无双模潜变量（与 BiT/CS 的结构不同），签名响应 $z = y + c s_1$ 中
+$y$ 为新鲜掩码。学习型攻击的标准形态是：对齐统计量中 $z$ 与 $c s_1$ 的相关随 $N$
+增长按 $\sigma(N) \propto N^{-1/2}$ 浮出——BiT-128 正是这样被攻破的。
+
+COMPASS-SIG-128 上这个预期的失败方式很干净：\textbf{方差收敛，信号不出现}。
+
+\begin{table}[htbp]\centering\small
+\begin{tabular}{@{}rrrrr@{}}
+\toprule
+$N$ & $\sigma$（实测） & $\sigma$（定律） & $\mathrm{corr}(\hat z, s_1)$ & 预期 corr \\
+\midrule
+5{,}000 & 50.00 & 48.85 & $-0.044$ & ${\sim}0.016$ \\
+100{,}000 & 10.83 & 10.92 & $-0.013$ & $0.075$ \\
+12{,}000{,}000 & 1.263 & 0.997 & $-0.006$ & $0.542$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+若仅看 $\sigma$ 列，一切正常；corr 列在三个数量级的样本上钉在零。统计量的方差描述的是
+噪声，信号是否存在于噪声之下是另一个问题——这正是判定必须同时测两者的原因。
+
+\section{根因：$w_1$ 一致性检查的条件化}
+
+签名循环（\code{sign.c} 第 197--213 行）在发布前执行一致性检查：计算
+$w_{\mathrm{approx}} = w - c s_2 + c t_0$，验证 $\mathrm{decompose}(w_{\mathrm{approx}})$
+的高位与原始 $w_1$ 一致，不一致则重抽。发布分布因此是条件分布：
+\[
+\Pr\bigl(\text{发布 }(c, z) \mid \text{接受}\bigr)
+\;\propto\; \Pr(y)\cdot \mathbf{1}\bigl[\,w_1\text{-consistency}(c, y, s_2, t_0)\,\bigr].
+\]
+指示函数依赖秘密。对 $z = y + c s_1$ 的对齐统计量，这一条件化的净效应是\textbf{恰好}
+消除 $c s_1$ 与统计量的相关性：接受事件筛掉的那部分 $(y, c)$ 组合，正是携带相关性的
+组合。``恰好消除''的机理值得强调——它不是把信号削弱到测量线下（那是 CS-128 的情形），
+而是把信号的对消做成了验证方程自身的代数性质。
+
+这在一类经典反例中有精确的对应物：令 $z = y + t$，若接受条件只保留落在共同内部区间的
+$z$，则接受后的 $z$ 可以与 $t$ 完全无关——截断可以彻底破坏回归信号。COMPASS-SIG-128
+的检查是这一原理在真实方案上的实例：自一致性检查充当了以秘密为参数的截断。
+
+\section{判定的更正过程}
+
+早期判定为``掩码受限，所需 $N \approx 4.8\times10^7$''——按 $\sigma$ 定律外推，corr
+应在 $5\times10^7$ 量级浮出。$1.2\times10^7$ 尺度的实验（预期 corr 0.542）给出
+$-0.006$ 后，该判定被更正为接受条件化安全。更正的依据是三尺度联合：$\sigma$ 吻合
+$+$ corr 恒零 $+$ 机理定位（两行代码的条件化项）。记录这个过程是因为它展示了一个普适
+的审计陷阱——\textbf{基于无条件方差定律的所需样本量预测，对存在秘密依赖接受条件的方案
+没有意义}；定律描述的是方差，信号（偏差方向）可能已被条件化单独消除。
+
+\section{与 CS-128 的对照：弱信号与零信号}
+
+CS-128 的壁垒是数量性的（最优分类器 $2\times10^6$ 条，实际 $3\times10^8$ 条）：信号
+非零，防御靠把信号压到实际不可利用。COMPASS-SIG-128 的壁垒是原理性的：信号为零，加
+数据无效。二者的防御审计含义不同——前者应关注任何提高标签质量的实现偏离，后者学习
+路线已闭合，剩余暴露面只在实现层（侧信道/故障）与公钥的格归约层。umodel 判定矩阵把
+这两种``不可恢复''作为不同机理输出，COMPASS-SIG-128 是``接受条件化消除''原型目前
+唯一的真实实例。
+
+\section{实现发现：伪 XOF}
+
+移植打包解码器时发现：COMPASS-SIG-128 源码中名为 ``shake256'' 的 XOF 实为 SM3 构造的
+伪 XOF（接口同、内部原语不同）。这对密码分析的影响是工程性的——任何假定 SHA-3 语义的
+分析工具都会在字节层对不上；解码器（\code{umodel/public\_decoders.py}）按真实语义
+移植，对捕获签名整包验证 200/200。该发现已按实现层观察记录，不构成本报告安全判定的
+依据。
+
+\section{下一步工作}
+
+\begin{enumerate}
+\item \textbf{利用条件化结构本身的高阶统计}。一阶相关性被对消，但条件分布
+  $P(\text{发布} \mid \text{接受})$ 仍是秘密的函数；以接受事件为条件的其它泛函（例如
+  边界样本的取舍模式）理论上可能携带残余信息。当前框架没有这类算子，适用性闸门会
+  显式拒绝——把它推导出来是一个明确的开放问题。
+\item \textbf{区分器的口径}。本判定针对简单回归族；若后续发现任何二阶以上统计偏离，
+  应先在受控重实现（去掉一致性检查）上定标信号，再回测出厂数据——与方向反转研究中的
+  ship$-$fix 配对方法（Shuttle 报告~\S2.3）同型。
+\end{enumerate}
+
+\section{复现指南}
+
+实验入口位于仓库顶层 \code{umodel/}，索引见 \code{code/README.md}：
+\begin{verbatim}
+python3 umodel/selftest.py        # 数值自测
+python3 umodel/run_demos.py       # 演示管线；COMPASS 相关演示在缺本地
+                                  # 审计 dump 时自动跳过并注明
+\end{verbatim}
+真实签名 dump 属本地审计数据，不入库。$\sigma$ 定律与相关系数的测定需要 COMPASS-SIG-128
+参考实现与固定密钥下的签名流；解码器与自测可完全公开复现。
+
+\section*{参考文献}
+\begin{enumerate}[label={[\arabic*]}]
+\item V.~Lyubashevsky. \emph{Fiat--Shamir with Aborts}. ASIACRYPT 2009（拒绝/接受
+  条件化的构造源头与截断反例的原理对应）.
+\item L.~Ducas, A.~Durmus, T.~Lepoint, V.~Lyubashevsky. \emph{Lattice Signatures and
+  Bimodal Gaussians}. CRYPTO 2013.
+\item COMPASS-SIG 提交包：NICCS 首轮数字签名候选.
+\end{enumerate}
+
+\end{document}

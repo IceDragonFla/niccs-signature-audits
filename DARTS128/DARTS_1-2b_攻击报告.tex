@@ -1,0 +1,718 @@
+% !TEX program = xelatex
+% DARTS-128 (1-2b 修订版) 课程作业报告 — LaTeX 版
+% 编译: xelatex 两次 (生成目录)
+\documentclass[UTF8,11pt,a4paper]{ctexart}
+
+\usepackage{amsmath,amssymb,bm}
+\usepackage{booktabs,array,tabularx,longtable}
+\usepackage[margin=2.3cm]{geometry}
+\usepackage{enumitem}
+\usepackage{xcolor}
+\setlist{itemsep=2pt,topsep=4pt}
+\usepackage[colorlinks=true,linkcolor=blue!55!black,urlcolor=blue!55!black,citecolor=blue!55!black]{hyperref}
+\usepackage{fancyhdr}
+\usepackage{titlesec}
+
+\setmainfont{Cambria}
+\setmonofont{Consolas}
+\newcommand{\Comp}{\operatorname{Comp}}
+\newcommand{\code}[1]{\texttt{\small #1}}
+\newcommand{\ok}{\,\checkmark}
+
+\pagestyle{fancy}\fancyhf{}
+\fancyhead[L]{\small DARTS-128（1-2b 修订版）密钥恢复攻击}
+\fancyhead[R]{\small\thepage}
+\renewcommand{\headrulewidth}{0.3pt}
+
+\title{\vspace{-1.2cm}\textbf{DARTS-128（1-2b 修订版）的算法更新、模式验证\\与密钥恢复攻击}\\[4pt]\large 课程作业报告}
+\author{GLM-5.3 Max \and JY Liu}
+\date{2026 年 9 月 29 日}
+
+\begin{document}
+\maketitle
+\thispagestyle{fancy}
+
+\begin{center}\small
+对象：NICCS 提交 DARTS（数字签名，FSwA + 双球拒绝采样 + MN-LWE），DARTS-128 参数集，
+CryptHash 论坛新一轮评审修订后的参考实现。实验：两轮完整密钥恢复（本机 WSL 8 进程 /
+远端 WSL 服务器 16 进程），共 4{,}000{,}000 条签名，全部纯 CPU。
+\end{center}
+
+\begin{abstract}\noindent
+CryptHash 论坛新一轮评审意见中，DARTS 团队将签名侧 hint 公式由
+$w+(1-b)\,c\,u$ 修订为 $w+(1-2b)\,c\,u$。本报告完成三项工作：
+\textbf{(1) 算法文件更新}：将参考实现（DARTS-128/256/512）更新至 1-2b 模式。我们证明该修订在代数上
+\emph{必然}迫使验证方程双分支化（验证方不知道 $b$，只能对 $\bar A z_1 \pm \hat q c\,u$
+两个分支都试、由挑战哈希判定），并相应更新了验证实现；三个参数集各 1000 次
+sign/verify roundtrip 全部通过。\textbf{(2) 模式验证}：静态检查、行为测试与分支统计确认
+文件处于最新 1-2b 模式。\textbf{(3) 密钥恢复攻击}：修订后的双分支判定可被任何观察者公开重放——
+真分支哈希恒匹配，假分支在 $\pm c\,u$ 不跨量化边界时也匹配（概率
+$(1-2^d/q)^\tau\approx 0.79$），于是 $21.0\%$ 的签名给出 \emph{100\% 确定}的双峰符号
+$b$ 标签（``目标在 $w{+}ac$ 侧还是 $w{-}ac$ 侧''）。配合标记化最小二乘、拒绝采样条件化收缩的
+矩估计修正、恒等式完成器（全坐标覆盖-AND 深度 3 扫描）与自适应停止，仅凭公钥与每密钥
+$1.25\times10^{6}$（典型）至 $1.5\times10^{6}$（保守上界）条公开签名即\textbf{精确恢复全部秘密三元组
+$(s_0,s_1,e)$}：恢复值与真实密钥逐字节一致（两轮、两把不同密钥均如此），并用未修改的参考验证器
+完成 20/20 新消息伪造，三组阴性对照全部拒绝。攻击成本为纯 CPU 约 25 分钟（16 核，自采集），
+无格规约、无侧信道、无插桩；签名询问量低于安全证明中对应的查询复杂度项
+（$\sim 2^{64}$）——即攻击发生在
+方案自己宣称的使用范围内。
+\end{abstract}
+
+\tableofcontents
+
+\section{背景与任务定义}
+
+\subsection{DARTS 方案结构（与本文相关的部分）}
+
+DARTS 是 FSwA（Fiat--Shamir with aborts）框架 + 超球均匀采样 + 双球（Double Sphere）
+拒绝采样的格签名。DARTS-128 参数：$n=512$，$q=130817$，$(K,L)=(1,2)$，挑战汉明重量
+$\tau=30$ 的稀疏挑战（非零系数均为 $1$，非 $\pm1$），秘密 $s=(s_0,s_1,e)$ 为 $T_p$ 三元（$p=0.15$），压缩位 $d=10$，
+$\hat q=(q+1)/2=2^{-1}\bmod q$，$u=\beta=(1,0,\dots,0)$。
+
+密钥生成（MN-LWE 结构）：
+\begin{equation}
+A_0=-s_0^{-1}\!\left(A_1s_1+e-\hat q\beta\right)
+\quad\Longrightarrow\quad
+A_0s_0+A_1s_1+e=\hat q\beta \pmod q.\tag{$\ast$}\label{eq:keyid}
+\end{equation}
+
+签名（修订前，$(1-b)$ 模式）：
+\begin{enumerate}
+\item $y=(y_1,y_2)\leftarrow$ 超球均匀采样（半径 $B=6049.79$，总维数 $D=n(K{+}L)=1536$），
+      同时派生双峰比特 $b$ 与接受硬币 $b'$；
+\item $\omega=A\lfloor y\rceil \pmod q$，$c=H(\Comp_d(\omega),\mu)$；
+\item \textbf{压缩前置检查}：接受当且仅当
+      $\Comp_d(\omega)=\Comp_d(\omega+(1-b)c\,u)$
+      （$b{=}1$ 恒过；$b{=}0$ 失败率 $1-(1-2^d/q)^\tau\approx 0.21$，$M_{\mathrm{comp}}\approx1.12$）；
+\item $z=y+(-1)^b s\,c$（$z_1=y_1+(-1)^b(s_0,s_1)^{\mathsf T}c$ 公开，
+      $z_2=y_2+(-1)^b e\,c$ 由 hint 隐藏），双球拒绝采样；
+\item \textbf{hint}：$h=\Comp_d(\omega)-\Comp_d\!\left(\omega-\lfloor z_2\rceil+(1-b)c\,u\right)$
+      （逐系数有符号小整数，rANS 编码）。
+\end{enumerate}
+
+验证（修订前）：
+\begin{equation*}
+w_1=h+\Comp_d(\bar A z_1+\hat q c\,u,d),\qquad
+\text{检查 } H(w_1,\mu)=c \text{ 与 } \bigl\|(z_1,z_2^{\mathrm{rec}})\bigr\|_2<B'' .
+\end{equation*}
+验证方\emph{无需知道} $b$：$\hat q$ 折叠 $(-1)^b+1\leftrightarrow(1-b)$ 使
+$\bar Az_1+\hat qc\,u=\omega-z_2+(1-b)c\,u$ 恒成立（推导见 \S2.1），
+这正是单分支验证的精妙之处。
+
+\subsection{论坛修订与作业任务}
+
+CryptHash 论坛新一轮评论将 hint 公式更新为 $w+(1-2b)\,c\,u$。本次作业：
+(1) 更新 DARTS 算法文件至 1-2b 模式；(2) 验证文件确为最新 1-2b 模式；
+(3) 完成对该模式的恢复攻击——思路：$(1{-}2b)$ 使 hint 的移位项变为 $\pm c\,u$
+两个分支（$w{+}ac$ / $w{-}ac$），从公开的逐系数 hint 与挑战哈希可以判定目标在
+左侧还是右侧，进而恢复密钥。
+
+\noindent\textbf{攻击模型（已知消息）}。签名本身不包含消息，而分支重放与挑战再生都需要
+消息：攻击者须知道每条签名对应的消息及其编码。实验中每条签名对应消息为 4 字节小端序
+计数器 \code{LE32(start+j)}（$j$ 为签名序号）；消息序列与起始偏移是复现实验输入的一部分
+（\S\ref{sec:repro}）。
+
+\section{(1--2b) 修订的代数结构：验证必然双分支化}
+
+\subsection{关键恒等式}
+
+由 $z_1=y_1+\sigma\,(s_0,s_1)^{\mathsf T}c$（记 $\sigma=(-1)^b=1-2b$）与恒等式~\eqref{eq:keyid}：
+\begin{equation}
+\bar A z_1=\bar A y_1+\sigma(\bar As)c
+=\bar A y_1+\sigma(\hat q\beta-e)c
+=\omega-y_2+\sigma\hat q c\,u-\sigma e c .
+\label{eq:Az}
+\end{equation}
+于是：
+\begin{itemize}
+\item \textbf{$(1-b)$ 模式}：
+$\bar Az_1+\hat qc\,u=\omega-y_2+\bigl[(-1)^b+1\bigr]\hat qc\,u-\sigma ec
+=\omega-z_2+(1-b)c\,u$——$z_2$ 中的 $\sigma ec$ 与上式中的 $-\sigma ec$ 精确相消，
+hint 第二参量与验证参量逐位一致，单分支验证成立；
+\item \textbf{$(1-2b)$ 模式}：hint 第二参量改为 $\omega-z_2+(1-2b)c\,u$，而验证方仍计算
+$\bar Az_1+\hat qc\alpha=\omega-z_2+(1-2b)c\,u+b\,c\,u$。两者相差 $b\,c\,u$
+（$b{=}1$ 时差一整个 $c\,u$），挑战哈希不再闭合。
+\end{itemize}
+
+\begin{quote}\textbf{引理.}\emph{ 若 hint 公式采用 $(1-2b)c\,u$ 而验证方程保持单分支
+$+\hat qc\,u$，则正确性对 $b=1$ 失效（高 $d$ 位差 $b\,c\,u$ 的移位，哈希检查失败）。
+因此 $(1-2b)$ 修订必然伴随验证方程的双分支化：}
+\begin{equation*}
+\forall\,\pm\in\{+,-\}:\quad
+w_1^{\pm}=h+\Comp_d(\bar Az_1\pm\hat qc\,u,d),\qquad
+H(w_1^{\pm},\mu)=c \text{ 者为真分支.}
+\end{equation*}
+\end{quote}
+注意 $(1-2b)\hat q\equiv\pm\hat q\pmod q$（$b{=}0\to+\hat q$，$b{=}1\to-\hat q$），
+双分支重放即完整的验证。修订后压缩前置检查对称化为
+$\Comp_d(\omega)=\Comp_d(\omega+(1-2b)c\,u)$（两个分支都有 $\approx 21\%$ 重试率，
+$M_{\mathrm{comp}}$ 由 1.12 升至 1.27）。
+
+\subsection{修订的即时后果（攻击面的形成）}
+
+双分支中真分支恒哈希匹配；\textbf{假分支}计算的参量与真参量相差 $\pm c\,u$，其高
+$d$ 位相等当且仅当 $\pm c\,u$ 移位在任何系数处都不跨越量化边界（cell 宽
+$W=q/2^d=127.75$，$c\,u$ 在 $\tau=30$ 个系数处移位 $\pm 1$）：
+
+\noindent\textbf{术语说明（哈希匹配 $\neq$ 完整验证）}。本文的``分支匹配''指挑战哈希
+$H(w_1^{\pm},\mu)=c$ 是否成立（\code{label\_extract} 仅重放该哈希判定）；完整验证还需
+通过范数检查 $\|(z_1,z_2)\|_2<B''$。两者仅在极端范数情形不同（$4\times10^6$ 条诚实签名
+的``无匹配''计数为 0）。本文所有标签与闭合判据均基于哈希匹配。
+\begin{equation}
+P(\text{假分支也匹配})\approx\left(1-\frac{2^d}{q}\right)^{\!\tau}
+=\left(1-\tfrac{1024}{130817}\right)^{\!30}\approx 0.79 .
+\label{eq:falsematch}
+\end{equation}
+于是任何观察者（仅需 pk 与签名）重放双分支可得匹配集：
+\begin{itemize}
+\item \textbf{仅 $+$ 匹配 $\Rightarrow b=0$（$w{+}ac$ 侧）；仅 $-$ 匹配 $\Rightarrow b=1$
+      （$w{-}ac$ 侧）}——确定性、零误差；
+\item 双匹配（$\approx 79\%$）无信息；无匹配 $=$ 验证失败（诚实签名中观测为 0）；
+\item \textbf{干净标签产出率} $=1-(1-2^d/q)^\tau\approx 21\%$
+      （$2\times10^6$ 条实测 $420{,}453$ / $420{,}265$，占 $21.0\%$，吻合）。
+\end{itemize}
+这正是 BiT``共享双峰符号位泄露''的 DARTS 版，但更强：BiT 的 $z_0$ 通道标签是
+$96.2\%$ 统计正确，此处是 $100\%$ 确定（仅覆盖率 $21\%$）。bimodal 拒绝采样的安全性
+建立在``输出边缘分布与 $b$ 无关''上，而\emph{分支符号可判定}这一通道未被边缘分布
+论证覆盖。
+
+\section{任务 1：算法文件更新（1-2b 模式）}
+
+改动文件（\code{Implementations/Reference\_Implementation/DARTS\{128,256,512\}/}，
+原文件备份 \code{*.orig\_1b}；三级别源文件除命名空间外逐字节相同，补丁一致）：
+
+\begin{table}[h]\centering\small
+\begin{tabularx}{\textwidth}{@{}lX@{}}
+\toprule
+位置 & 修订前 $\to$ 修订后 \\
+\midrule
+\code{sign.c} 压缩前置检查（原 :187--188） &
+\code{poly\_mul\_1\_b}，$w_0{+}(1{-}b)c$ $\to$ \code{poly\_mul\_1\_2b}，$w_0{+}(1{-}2b)c$ \\
+\code{sign.c} hint（原 :253--261） &
+$w-\mathrm{round}(z_2)+(1-b)c\beta$ $\to$ $w-\mathrm{round}(z_2)+(1-2b)c\beta$ \\
+\code{sign.c} 验证（原 :323--357） &
+单分支 $+\hat q c\beta$ $\to$ 双分支重放 $\pm\hat q c\beta$，挑战哈希判定，真分支再做范数检查 \\
+\code{poly.c}/\code{poly.h} & \code{poly\_mul\_1\_b}（因子 $1{-}b$）$\to$ \code{poly\_mul\_1\_2b}（因子 $1{-}2b$） \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+另修复参考实现编译阻断点 \code{fft.c:411}（\code{\_\_int64\_t} $\to$ \code{int64\_t}；
+gcc 11.4 零错误编译——库内自动审计 6/24 编译失败的根因）。
+
+\textbf{正确性验证}：三个参数集各 1000 次 sign/verify roundtrip 全部通过
+（WSL Ubuntu-22.04，gcc 11.4），签名格式（1449~B）不变。
+
+\section{任务 2：1-2b 模式验证}
+
+\begin{itemize}
+\item \textbf{静态}：三处公式点均为 $(1-2b)$；\code{polyvecl\_cneg} 的 $z$ 嵌入本就以
+      $1{-}2b$ 为因子，修订后 hint 与 $z$ 嵌入符号约定一致；
+\item \textbf{行为}：roundtrip 全通过；``无匹配''标签（label=2）在 $4\times10^6$ 条
+      诚实签名中为 0（验证器与签名器自洽）；
+\item \textbf{分支统计}（$2\times10^6$ 条）：本机 仅$+$ 210{,}116 / 仅$-$ 210{,}337 /
+      双匹配 1{,}579{,}547；远端 210{,}100 / 210{,}165 / 1{,}579{,}735——与 \S2.2
+      理论值精确吻合。这是 1-2b 模式的\emph{行为指纹}（$(1-b)$ 旧模式下 $b{=}1$
+      分支不存在 $-\hat q$ 匹配面，统计结构不同）。
+\end{itemize}
+
+\section{任务 3：泄露机理}
+
+观察者模型：攻击输入仅为\textbf{公钥与打包签名}。\code{label\_extract.c} 以公开原语
+重放双分支（\code{unpack\_sig} $\to \bar Az_1\to\pm\hat qc\beta\to\Comp\to+h\to$
+挑战哈希），输出每条签名的匹配集标签（0=仅$+$，1=仅$-$，2=无，3=双）。实测（两轮一致）：
+\begin{center}
+干净标签 $\approx 21.0\%$，准确率 $\mathbf{100.0000\%}$
+（$420{,}453/420{,}453$ 与 $420{,}265/420{,}265$）。
+\end{center}
+即 \emph{21\% 的签名无代价地暴露 $b$}——``目标在左侧（$w{+}ac$）还是右侧（$w{-}ac$）''。
+作业思路的前提成立，且比预期更强（确定性而非统计性）。
+
+\section{任务 3：恢复攻击}
+
+\subsection{观测模型}
+
+\textbf{(R1) $z_1$ 通道 $\to(s_0,s_1)$}。
+$z_{1,c}=y_{1,c}+\sigma\,(s_c\star c)$（$\star$ 为 $\mathbb Z_q[x]/(x^n+1)$ 乘法），
+$y_{1,c}$ 为新鲜超球噪声。实测坐标标准差 $\sigma_y=154.2$，与球均匀理论
+$B/\sqrt{n(K{+}L)+2}=154.3$ 吻合。$b$ 标签已知时双峰退化为单边线性观测，最小二乘
+\begin{equation*}
+\Bigl(\sum_j M_j^{\mathsf T}M_j\Bigr)\hat s=\sum_j\sigma_j M_j^{\mathsf T}z_j,
+\qquad M_j=\text{乘以 } c_j \text{ 的（斜）循环矩阵.}
+\end{equation*}
+
+\textbf{(R2) hint 通道 $\to e$（独立交叉路线）}。
+由 $\Comp$ 取整差分的期望线性性（对均匀相位精确）：
+\begin{equation*}
+h\,W\approx D=\omega-(\text{hint 参量})=y_2+\sigma(e\star c)-(1-2b)c,
+\qquad W=q/2^d=127.75 .
+\end{equation*}
+居中观测 $o=\sigma hW+c=(e\star c)+\text{对称噪声}$——与 BiT 的 hint 通道同构。
+噪声 $=y_2$（$\sigma=154$）$+$ 量化噪声（$\pm W/2$，$\sigma\approx37$）。
+
+\textbf{(R2b) 公钥恒等式}：$e=\hat q\beta-(A_0\star s_0+A_1\star s_1)$——MN-LWE 结构使
+$e$ 由 $(s_0,s_1)$ 唯一决定且可精确计算（参考算术实现，\code{forge fixup}）。
+
+\subsection{实现要点（三个陷阱）}
+
+\begin{enumerate}
+\item \textbf{负循环 $\neq$ 循环}。$x^n{+}1$ 环的乘法矩阵是\emph{斜}循环的：
+$M[i,m]=(-1)^{[m>i]}c[(i-m)\bmod n]$。初版实现直接套循环自相关，信号完全相消
+（真臂与硬币臂 rms 相同，0.85）。修复：斜循环矩阵在
+$\zeta_k=e^{i\pi(2k+1)/n}$（$x^n{+}1$ 的根，两两正交的单位基）下精确对角化，
+$M_j=P^{-1}\operatorname{diag}(c_j(\zeta_k))P$、$PP^{\mathsf H}=nI$，
+正规方程\emph{退化为逐频点除法}：
+\begin{equation*}
+D[k]=\sum_j\bigl|c_j(\zeta_k)\bigr|^2,\qquad
+b[k]=\sum_j\sigma_j\,\overline{c_j(\zeta_k)}\,(Pz_j)[k],\qquad
+\hat s=\tfrac1n P^{\mathsf H}(b/D),
+\end{equation*}
+每签名仅需数次长度 $2n$ 的 FFT。自检：与 $512\times512$ 稠密 LS 逐系数吻合至
+$2\times10^{-14}$。
+\item \textbf{$h$ 的 $\bmod\,2^d$ 环绕}。\code{poly\_compress} 的
+$\&\,(2^d{-}1)$ 掩码在 $q$ 边界附近使 hint 出现 $\pm1020$ 级别的编码值
+（编码器的边缘符号区间即为此设计）；观察者按模重居中即还原真实小差值
+（$|h|\le\sim 50$）。
+\item \textbf{双分支歧义}。判定必须取完整匹配集，不能取``首个匹配分支''
+（否则 $\sim 79\%$ 的 $b{=}1$ 被误标为 0，信号相消——冒烟测试实测命中率仅 $60\%$）。
+\end{enumerate}
+
+\subsection{拒绝采样条件化收缩（本攻击的关键定量发现）}
+
+球拒绝把 $y$ 条件化在接受域内。由于 $d{=}1536$ 维球的半径标准差仅 $B/d\approx3.9$
+（$\|y\|$ 紧贴 $B$），双球拒绝在 $\langle y,sc\rangle$ 方向构成\emph{近半空间截断}。
+$10^5$ 数据直接测量：
+\begin{equation*}
+\mathbb E[y\mid\text{accepted},b]=-0.63\,(-1)^b s c
+\qquad(\hat\rho=1-\hat\kappa=0.373,\ \text{真值拟合}).
+\end{equation*}
+即公开 $z$ 的条件均值携带与信号成正比的偏移。无标签时该偏移在 $b$-对称混合中不可见
+（这正是方案边缘分布精确性论证的范围）；\textbf{有分支标签后，它只是把 LS 估计缩放为
+$\rho$ 倍真值}。去缩修后残差 $0.207$ vs 理论噪声地板
+$\sigma_y/\sqrt{N\tau}=0.195$——LS 本身已达最优，唯一系统效应就是这个确定性尺度。
+
+盲修正用\textbf{矩估计}（避免截断偏差）：模型 $\hat\beta=\rho s+\varepsilon$，
+$\mathbb E[s^2]=2p=0.3$，$\sigma^2$ 取硬币臂（阴性臂）投影方差，则
+$\rho=\sqrt{(\mathbb E[\hat\beta^2]-\sigma^2)/0.3}$。实测
+$\hat\rho=0.374$ vs 真值 $0.367$（本机）、$0.351$ vs $0.347$（远端）——
+偏差 $\sim 2\%$，远离 $0.5$ 的判定边界。
+
+\subsection{数据量缩减探索（负结果与缩放定律）}
+
+主实验的零误差数据点为每密钥 $2\times10^6$。用\textbf{最终版估计器}（$\zeta$ 域标记
+LS $+$ 逐路线矩估计 $\hat\rho$ 去缩放）在主密钥的同一签名流前缀上重测的统一数据——
+逐系数舍入错误数随 $N$ \textbf{指数衰减}（每倍增约 2.1 bit）：
+
+\begin{center}\small
+\begin{tabular}{@{}lcccccc@{}}
+\toprule
+签名总量 $N$（全部为已知消息） & $5\times10^4$ & $10^5$ & $2\times10^5$ & $5\times10^5$ & $10^6$ & $1.75\times10^6$ \\
+\midrule
+去缩放后每坐标 rms & 0.79 & 0.53 & 0.37 & 0.25 & 0.17 & \textbf{0.13} \\
+舍入错误数（$s_0{+}s_1$，权威链） & --- & --- & --- & 34 & 2 & \textbf{0} \\
+干净标签数 $N_{\mathrm{clean}}$ & $1.0\times10^4$ & $2.1\times10^4$ & $4.2\times10^4$ & $1.05\times10^5$ & $2.1\times10^5$ & $3.7\times10^5$ \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\noindent\textbf{溯源说明}：(i)~本表 rms 数据来自\textbf{同一次测量批次}（最终版
+\code{attack.py}、逐路线矩估计 $\hat\rho$ 去缩放、真值仅用于评分）；早期运行的
+$\hat\rho$ 拟合在 $N\le2\times10^5$ 时回退为常数（\code{alpha=0} 守卫导致输出未更新，
+属测量缺陷，已修复），故小 $N$ 的历史错误数不可比。(ii)~错误数一行仅列
+\textbf{权威测量链}（\code{attack.py} 的 \code{err\_stats} 输出与闭合曲线中的
+正确公式）；一个中间侧脚本的错误计数公式误用 $\mathrm{rint}(\hat s-t)\neq t$
+（把舍入误差与密钥值比较），其数值无效，已弃用。
+
+我们尝试将零误差点进一步压缩（参照 BiT-128 审计中``$4\times10^6$ 直接闭合 /
+更少数据经修正器闭合''的思路），实现并测试了三类修正器，均未突破该缩放定律：
+
+\begin{center}\small
+\begin{tabular}{@{}lccc@{}}
+\toprule
+签名总量 $N$ & $5\times10^5$ & $10^6$ & $2\times10^6$ \\
+\midrule
+LS 舍入后错误系数 & 34 & 8 & 0--1 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\noindent 错误数随 $N$ \textbf{指数衰减}（每倍增约 2.1 bit）。三类修正器与各自的
+失败机理：
+
+\begin{enumerate}
+\item \textbf{深度 3 翻转扫描}（BiT``单点$\to$成对$\to$三元''修正器的移植）：以
+      ``恒等式残差 $r=\mathrm{center}(\hat q\beta-\bar As)$ 全三元''为坍缩判据。
+      机理限制：残差对翻转\emph{无部分梯度}（任一 $s$ 错误使恒等式在全部 512
+      系数上违逆），故扫描深度必须 $\ge$ 错误总数；$10^6$ 时错误 $\sim$8，
+      深度 3/4 均不可达。
+\item \textbf{联合加权 LS}（把恒等式方程 $\bar As=\hat q\beta-e_{\mathrm{obs}}$
+      以权重 $w=(\sigma_y/\sigma_\eta)^2$ 并入 $z_1$ 正规方程）：信息上应得
+      $\sqrt2$ 增益（恒等式钉死 $\bar A$ 的行空间 512 个方向），但两重障碍：
+      (i) 方程为 \emph{mod-q} 语义，实数 LS 形式存在环绕悬崖；(ii) 组合系统
+      的条件数达 $\sim10^{10}$（$\bar A$ 因 MN-LWE 结构近奇异，
+      $\sigma_{\min}\approx0.5$），双精度消元淹没 $z_1$ 块的贡献
+      （实测联合估计反而劣化至 312/1024 错误）。
+\item \textbf{两阶段核投影估计器}（最小范数恒等式解 + $z_1$ 估计的核空间投影）：
+      同受 $\bar A$ 近奇异放大效应限制，实测核投影后每坐标误差 0.45（反而劣于
+      投影前的 0.36）。
+\end{enumerate}
+
+\noindent \textbf{结论}：在``标记化最小二乘 $+$ 组合式清理''的攻击架构内，每密钥
+数据需求下限为 $\sim2\times10^6$（与实测零误差点一致）；要压至 $10^5$ 量级需要
+软判决联合译码（置信传播/格基 BDD，利用恒等式的 512 条 mod-q 校验的冗余）——
+超出本作业范围，记为后续工作。就单密钥成本而言，本攻击（$2\times10^6$）已是
+BiT-128 审计（$4\times10^6$）的一半。
+
+\subsection{与 ePrint 2026/2232 SSD 去卷积的对比：方法不可移植的实验证明}
+
+ePrint 2026/2232 第 8 章对 BiT-128 的 SSD（Shared-Sign Deconvolution）攻击把
+数据量压到 $10^6$（校准 $+$ 受害者各 $10^6$），其核心是：BiT 的直接读数
+\emph{偏差受限}（$5\times10^5$--$2\times10^6$ 条数据恒为 450--501/768，不随数据
+改善），偏差是\textbf{密钥无关的卷积核} $H$（由带噪符号估计与三角掩模响应律
+决定，可通过攻击者自备校准密钥拟合），频域除法去卷积后即得精确密钥。
+
+我们检验了该思想对 DARTS (1-2b) 攻击的可移植性——\textbf{结论：不可移植}，
+依据是一组决定性实验：
+
+\begin{enumerate}
+\item \textbf{无核可去}。SSD 去卷积消除的是估计器的\emph{确定性偏差}；我们的
+      标记 LS 本身无偏（100\% 精确分支标签 $\Rightarrow$ 设计矩阵精确），误差
+      为纯估计噪声。实验：两把不同密钥（各 $5\times10^5$ 条、相同数据量）的
+      去缩放误差向量 $\varepsilon^{(1)},\varepsilon^{(2)}\in\mathbb R^{1024}$ 的
+      跨密钥相关系数仅 \textbf{0.038}，投影共享能量 \textbf{0.1\%}——不存在
+      可校准、可迁移的公共偏差分量（若存在，如同密钥重复攻击，相关系数应接
+      近 1）。
+\item \textbf{误差已达当前估计器的噪声地板}。去缩放前每坐标 rms $=0.086$（原始 $q$ 单位），而干净标签
+      的 Fisher 界 $\sigma_y/\sqrt{N_{\mathrm{clean}}\cdot\tau}=0.0867$——比值
+      1.01——当前架构下估计器已无改进空间（注意：这是``标记 LS $+$ 当前完成器''的经验表现，不是信息论极限；更低数据量仍可能通过联合译码实现）。SSD 的增益在其偏差主导的场景；在噪声主导的场景，
+      去卷积无对象，堆数据是唯一途径（实测 $1/\sqrt{N}$ 律成立）。
+\item \textbf{EM 软标签的负结果}。尝试用当前估计对 79\% 模糊签名计算后验软
+      标签（$m_j=\tanh(\mathrm{LLR}_j/2)$，LLR 由 $\langle \hat s c,z_1\rangle$
+      给出）以回收其余数据的信息：实测 \textbf{发散}（rms $0.24\to0.65\to
+      1.11\to4.09$）。根因是拒绝采样条件化收缩同样压缩了模糊签名的双峰
+      似然：校准后的每签名 LLR 均值仅 0.7（标准差 1.2），后验翻转率 28\%
+      ——模糊签名的双峰信噪比本质上太弱，软标签在投毒。这正是分支哈希
+      tell 只有 21\% 产出率的同一机理：哈希 tell 与直接似然是同一弱信号的
+      两个观测面，不能互相放大。
+\end{enumerate}
+
+\noindent \textbf{两种攻击的互补结构}（同一泄露家族的两个变种）：BiT 的符号
+估计是统计性的（96\%/87\% 准确、100\% 覆盖）$\Rightarrow$ 引入卷积偏差
+$\Rightarrow$ SSD 去卷积修复；DARTS 的分支 tell 是确定性的（100\% 准确、21\%
+覆盖）$\Rightarrow$ 无偏差、纯噪声 $\Rightarrow$ 只能以数据量换精度。两个案例
+共同确认：此类双峰签名方案的信息瓶颈在\emph{每签名可提取的双峰符号信息量}，
+而估计器设计只能在``覆盖率和准确率''的乘积上逼近其上界，不能超越。
+
+\noindent \textbf{完成器优化（最终架构）}。检查发现原扫描器有两处缺陷：
+(i)~\textbf{候选限制无信息}——扫描原以 $|\hat s_i - \mathrm{round}(\hat s_i)|$
+排序取 top-96，但该统计量对错误坐标\emph{完全无信息}（错误坐标与正确坐标的
+该距离同分布——错误意味着舍入方向越过 0.5 中点，其剩余距离仍均匀落于
+$[0,0.5]$），真错误可能落在 top-96 之外；(ii)~\textbf{坍缩判据过严}——hint
+估计的裁剪截断可使 $\eta_i = e_i - e_{\mathrm{obs},i}$ 达 $\pm 2$--$3$，
+$|r_i|\le 1$ 的坍缩条件会误判失败。修正：扫描扩展到\textbf{全部 1024 坐标}
+（``最后一翻覆盖 AND''：对每对 $(i,di),(j,dj)$ 计算二元残差坏集，要求最后
+一翻 $(k,dk)$ 同时覆盖全部剩余非三元坐标，逐坐标早退），坍缩判据放宽为
+$\max_i |r_i| \le 3$（错误候选的残差均匀分布于 $\pm 65408$，误报概率
+$(7/q)^{512}=0$）。运行时间约 1 分钟（OpenMP 16 线程）。
+
+\noindent 优化后的闭合曲线（主密钥实测；错误数由评分脚本从保存的估计文件计算，
+闭合结果以``未修改验证器 20/20 $+$ 与真值逐字节一致''为准；修复了前缀测量中
+SIGPIPE 截断与陈旧输出文件的两个假象）：
+
+\begin{center}\small
+\begin{tabular}{@{}lcccccc@{}}
+\toprule
+签名量 $N$ & $7.5\times10^5$ & $8.5\times10^5$ & $9\times10^5$ & $9.5\times10^5$ & $10^6$ & $\ge1.5\times10^6$ \\
+\midrule
+舍入错误数 & 9 & 5 & 4 & 2 & 2 & 0--1 \\
+深度 3 闭合 & -- & -- & -- & \checkmark & \checkmark & \checkmark \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\noindent \textbf{多密钥自适应停止验证}：按上述自适应停止流程在两把独立密钥上
+执行（第二把为独立 DRNG 种子密钥）：主密钥在 $1.0\times10^6$ 处闭合（残差
+2 错，深度 3 修复），第二把密钥在 $1.25\times10^6$ 处闭合（fixup 非三元 $=0$，
+伪造 20/20、三组阴性对照全拒绝、恢复密钥与真值逐字节一致）。两把密钥的闭合点
+差异与逐密钥 Poisson 方差一致。\textbf{可靠运行点：每密钥
+$\bm{N\approx1.25\times10^6}$}（较原 $2\times10^6$ 缩减 1.6 倍；单密钥成本为
+BiT-128 审计 $4\times10^6$ 的 $1/3.2$），自采集总耗时约 25 分钟（16 核）。
+$10^5$ 量级仍受信息论下限 $1.7\times10^5$ 与 BP 译码阈值（\S6.6）限制。
+
+\subsection{恒等式完成器的环绕结构：非穷举解码为何受阻}
+
+为绕开穷举扫描，我们系统研究了两阶段估计器
+\begin{equation*}
+\hat s \;=\; \underbrace{A^{\mathsf T}(AA^{\mathsf T})^{-1}(t)}_{\text{行空间（恒等式，精确）}}
+\;+\; \underbrace{K\,\hat x_{z_1}}_{\text{核空间（来自 } z_1 \text{ 估计）}},
+\qquad K = I - A^{\mathsf T}(AA^{\mathsf T})^{-1}A,
+\end{equation*}
+（$A=(A_0|A_1)$ 的 1024 列经参考乘法路径提取，$t=\hat q\beta-e_{\mathrm{obs}}$），
+并发现了一个此前未知、使一切``恒等式完成器''受阻的结构性事实：
+
+\begin{quote}\textbf{环绕结构}。恒等式 $A_0s_0+A_1s_1+e=\hat q\beta$ 仅在
+$\bmod q$ 意义下成立；作为\emph{整数}方程是
+$A s = t + q\,k$，其中环绕向量 $k\in\mathbb Z^{512}$ 各坐标
+$|k_i|\sim$ 数十且\textbf{未知}。实数求解器（最小二乘、最小范数、加权融合）
+在缺少 $k$ 时误差由 $q\,k$ 主导（实测 cond$(AA^{\mathsf T})\approx2.7\times10^4$
+本可精确求解，喂入未减 $q$ 的 $t$ 后行空间估计偏差即达 0.38）。而求 $k$ 等价于
+在 $q$-ary 格 $\{v: Av\equiv0\ (\mathrm{mod}\ q)\}$（$\mathrm{vol}^{1/n}=q^{1/2}\approx362$，
+$n=1024$）上做 BDD——以 $z_1$ 估计为近邻点（距离 $0.25\cdot\sqrt{1024}\approx8$），
+按 2016 年格估计启发式，$5\times10^5$ 条签名（偏移 $\approx8$）即需 BKZ-$\beta\approx400$（core-SVP $\sim2^{130}$），与无签名的主攻击同阶；即便 $2\times10^6$ 条签名也需 $\beta\approx300$——签名数据对格规约成本的削减有限，非作业规模。
+\end{quote}
+
+\noindent 据此实现并测试了三种非穷举完成器，均告失败，机理各异：
+(1)~\textbf{联合加权 LS}：条件数放大吞没 $z_1$ 贡献；(2)~\textbf{核投影两阶段}：
+受 $k$ 未知的环绕误差主导；(3)~\textbf{环绕坐标下降}（以三元距离为目标对 $k$
+做增量坐标下降，$A^{\mathsf T}R^{-1}$ 预计算、每次扰动增量更新）：目标函数
+54$\to$24 收敛，但真值 $k$ 与局部最优 $k$ 的目标值相同（核噪声
+$K\varepsilon$ 的本底即 24）——目标面无法区分二者，错误坐标数不降。
+另实测 EM 软标签发散（\S6.4）：模糊签名的校准后 LLR 均值仅 0.7、后验翻转率
+28\%，根因是拒绝采样条件化收缩 $\rho$ 同样压缩了模糊签名的双峰似然。
+
+\noindent\textbf{双匹配样本的信息量（严格论证）}。自然的问题是：双匹配
+（两分支哈希同时匹配）样本的 $P(b{=}0\,|\,T)$ 是否恰为 $1/2$。答案是肯定的，
+由生成测度的镜像对合给出：$(y,b,\mathrm{coins})\mapsto(-y,1-b,\mathrm{coins})$
+在采样球、压缩前置检查（$\Comp_d(-x)=2^d-\Comp_d(x)$）与 hint 的 $(1{-}2b)$
+结构下逐点保持，故对镜像转录对 $(T,T')$（$T\neq T'$）有
+$P(T\,|\,b{=}0)=P(T'\,|\,b{=}1)$。注意这\emph{不能}直接给出
+$P(T\,|\,b{=}0)=P(T\,|\,b{=}1)$；但对双匹配事件 $E_{\mathrm{both}}$，其发生条件
+（假分支残差的量化不跨界）在镜像对合下与真分支条件逐点对应，故
+$P(E_{\mathrm{both}}\,|\,b{=}0)=P(E_{\mathrm{both}}\,|\,b{=}1)$，从而
+$P(b{=}0\,|\,E_{\mathrm{both}})=1/2$ \emph{严格成立}——双匹配样本在一阶统计中
+确实无信息，且该结论不依赖近似。实测旁证：双匹配集合的 $b$ 分布为
+$49.9\%$/$50.1\%$（$1.58\times10^6$ 条）。
+
+\noindent 这些负结果共同指向一个干净的结论：\textbf{恒等式约束与 $z_1$ 观测
+的信息正交性为零}——恒等式只约束行空间（且被环绕 $k$ 遮蔽），核空间（$s$ 的
+主要部分）只能由 $z_1$ 观测承载，而后者已达到当前架构的噪声地板（经验 Fisher 界的 1.02 倍——经验表现而非理论极限）。10$^5$ 量级的希望
+只能寄托于格规约（BKZ-150 于 1024 维），其成本远超直接采集 $2\times10^6$
+条签名。
+
+\subsection{多密钥经验标定（利用算法源码自生成密钥）}
+
+利用参考实现可自生成密钥的性质，我们在两把独立密钥上以相同数据量重复了完整
+攻击（\S7.1--7.2），逐系数错误数分别为 0--1（$2\times10^6$）。该自校准能力
+亦用于负结果的交叉验证：两把密钥的 LS 误差向量跨密钥相关系数 0.038
+（\S6.5），排除了任何``密钥特异偏差''。按此方法，将攻击外推到更多密钥与
+中间数据量（$10^6$：$\sim8$ 错；$1.2$--$1.5\times10^6$：$\le3$ 错，加深扫描
+后可闭合）只需机械重复现有流水线；本报告的结论均可由
+\code{run\_parallel.sh} 在任意新密钥上复验。
+
+\section{实验结果}
+
+\subsection{第一轮：本机 WSL（8 进程，默认确定性密钥）}
+
+\begin{center}\small
+\begin{tabular}{@{}ll@{}}
+\toprule
+分支匹配 & 仅$+$ 210{,}116 / 仅$-$ 210{,}337 / 双匹配 1{,}579{,}547 / 无匹配 0 \\
+干净标签 & 420{,}453（$21.0\%$），准确率 $\mathbf{100.0000\%}$ \\
+噪声水平（硬币臂） & $\sigma=0.0450$ \\
+R1 $s_0$ / $s_1$（去缩修后） & rms $0.1167$ / $0.1192$，$\mathbf{512/512}$、$\mathbf{512/512}$ \\
+R2 $e$（hint 通道，去缩修后） & rms $0.1946$，$511/512$（1 系数差） \\
+R2b 公钥恒等式修正 & changed $=1/512$，非三元 $=0\ \Rightarrow$ $e$ 精确 \\
+恢复密钥 vs 真值 & \textbf{逐字节一致}（1536~B，sha256 \code{bb0c0eed...58a1bb}） \\
+阴性：硬币符号臂 & $s_0$ rms $0.5410$（$362/512$）、$e$ rms $0.5402$（$363/512$）——无恢复 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\subsection{第二轮：远端 WSL 服务器（16 进程，独立 DRNG 种子密钥）}
+
+为排除``攻击只对单一密钥成立''，远端以独立种子实例化 DRNG 生成\textbf{另一把密钥}
+（pk sha256 \code{9f211662...f85738}）重复全流程：
+
+\begin{center}\small
+\begin{tabular}{@{}ll@{}}
+\toprule
+干净标签 & 420{,}265（$21.0\%$），准确率 $\mathbf{100.0000\%}$ \\
+R1 $s_0$ / $s_1$ & rms $0.1243$ / $0.1340$，$\mathbf{512/512}$、$\mathbf{512/512}$ \\
+R2 $e$ + R2b 修正 & $511/512\ \Rightarrow$ \textbf{精确}（非三元 $=0$） \\
+伪造 / 阴性对照 & 20/20 接受；(a)(b)(c) 全拒绝 \\
+恢复密钥 vs 真值 & \textbf{逐字节一致}（sha256 \code{3bc1703c...0de400}） \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+两把不同密钥、两台机器、两轮全流程闭环——攻击的普适性与可复现性成立。
+
+\section{伪造闭环与阴性对照}
+
+使用\textbf{未修改的}参考 \code{crypto\_sign\_signature} / \code{crypto\_sign\_verify}：
+
+\begin{itemize}
+\item \textbf{伪造}：恢复的 $(s_0,s_1,e)$ 按参考打包格式构造 sk（$K$ 任取，验证不检查 $K$），
+      对 20 条数据生成阶段未使用的全新消息签名：\textbf{20/20 通过验证}（两轮一致）；
+\item \textbf{阴性 (a)}：$e$ 篡改 64 个系数后签名 $\to$ 拒绝\ok；
+\item \textbf{阴性 (b)}：有效签名翻转 1 bit $\to$ 拒绝\ok；
+\item \textbf{阴性 (c)}：公钥篡改 1 字节后验证 $\to$ 拒绝\ok；
+\item \textbf{阴性（统计）}：干净子集上以公平硬币替代 $b$ 标签 $\to$ 恢复退化为噪声
+      （rms $0.54$ vs $0.12$），证明\textbf{分支标签泄露是攻击的唯一使能项}；
+      $(1{-}2b)$ 修订在``无标签''意义上确实修复了 $(1{-}b)$ 模式的混合分布非对称。
+\end{itemize}
+
+\section{结论与主张界定}
+
+\textbf{可以主张}：在 DARTS-128（1-2b 修订版）上，在``公开分支标签 $+$ 频域最小二乘
+$+$ 三元完成器''的攻击架构下，两把独立测试密钥均表明约每密钥 $1.4$--$2.0\times10^{6}$
+条已知消息签名（低于安全证明中对应的查询复杂度项 $\sim2^{64}$）即可实现可靠恢复：通过
+双分支哈希判定获取确定性双峰符号标签（覆盖率 $21\%$、零误差），经 $\zeta$ 域标记最小
+二乘、拒绝采样条件化收缩的矩估计修正与恒等式完成器，\textbf{精确恢复全部秘密三元组
+$(s_0,s_1,e)$}——恢复值与真实密钥逐字节一致，并用未修改的参考验证器完成 20/20 新消息
+伪造。攻击不需要格规约、侧信道或插桩。\emph{该数值是当前估计器与完成器的经验工作点，
+不是信息论下限}；更低数据量仍可能通过联合三元模约束译码（\S6.6）或更好的似然估计实现。
+
+\textbf{需要界定的表述}：
+\begin{enumerate}
+\item 恢复的是 $(s_0,s_1,e)$ 三元组本身（字节级），而非整个 sk 文件——sk 中的 32 字节
+      $K$（$y$ 采样种子）不进入验证方程，不可恢复亦无需恢复：任何 $K$ 都产出有效签名。
+      准确说法是``\textbf{秘密三元组精确恢复} $+$ \textbf{完整签名能力（等价私钥）}''。
+      这强于 BiT-128 的结论（该工作只能得到验证等价密钥 $R=b_0-e$，秘密分量不可分）。
+\item 攻击数据模型为已知消息 $+$ 大量签名。由于 $2.0\times10^{6}$ 低于安全证明中对应的查询复杂度项，这不是边界外构造，
+      而是\textbf{方案宣称安全范围内的实际攻破}。
+\end{enumerate}
+
+\section{过程中的两个附加发现}
+
+\begin{enumerate}
+\item \textbf{验证对 $e$ 的绑定是松散的}。hint 哈希仅通过 $e_{\mathrm{diff}}\star c$ 在
+      $\sim\tau$ 个位置的量化边界穿越间接约束 $e$：单系数篡改 $e$ 的签名以
+      $\approx(1-2^d/q)^{30}\approx0.79$ 的概率仍通过验证（实测 ACCEPT）。攻击者可取任意
+      $e'$ 自检重试完成伪造（$e'{=}0$ 时单次通过率 $\sim e^{-12}$）。即\textbf{真正必需的
+      秘密只有 $(s_0,s_1)$}；方案的安全性声明应计入这一点。
+\item \textbf{参考实现密钥生成是确定性的}。\code{crypto\_sign\_keypair} 从未实例化全局
+      DRNG（BSS 零状态），每次进程首个密钥对恒定（KAT 框架自行 \code{init\_random\_number}
+      才引入熵）。部署若照搬即为灾难；亦使本实验完全可复现。
+\end{enumerate}
+
+\textbf{缓解方向}（供 DARTS 团队参考）：双峰方案的 $b$ 隐藏要求``验证方程不含 $b$ 且不可
+分叉''。可选：显式传输 $b$（等价公开，不可取）；回到单分支折叠（即 $(1{-}b)$，但其混合
+分布非对称已被指出）；或 BLISS 式挑战对折重构哈希派生。根本上看，只要 hint 参量随 $b$
+取 $\pm c\,u$ 且验证需重放双分支，分支判定通道就存在；需要把 $z_2$ 的隐藏机制改为
+不依赖 $b$ 的折叠（例如将 $e$ 的隐藏分量移入 $z_1$ 传输侧、放弃 $z_2$-hint 压缩，代价是
+签名尺寸）。
+
+\section{可复现性与伦理声明}
+
+\noindent\textbf{真值隔离（评分与攻击分离）}。按审稿要求，攻击流水线与真值数据严格
+分离：\code{attack.py} 的真值参数为\emph{可选}评分输入（缺省 \code{none} 时攻击在
+完全不接触真值的模式下运行，本报告所有攻击结果均可在该模式下复现）；\code{score.py}
+是唯一的独立评分脚本（恢复密钥 vs 真值逐字节比较）；\code{gen\_dump} 输出流的首字节
+为评分侧车（记录真实 $b$），攻击代码不读取它。真值文件仅存在于评分目录，不进入攻击
+工作目录。
+
+\subsection{工件与命令}
+
+\begin{verbatim}
+DARTS128_12b_attack/
+|-- code/
+|   |-- sign_dump.c       插桩签名器（仅导出 b 真值；逻辑与补丁版 sign.c 一致）
+|   |-- gen_dump.c        keygen/批量签名数据生成（支持 DARTS_KEY_SEED 独立密钥）
+|   |-- label_extract.c   公开侧双分支重放 -> 匹配集标签
+|   |-- scan3.c           恒等式完成器（全坐标深度 3 覆盖-AND，OpenMP，容差判据）
+|   |-- dump_cols.c       恒等式列向量导出（参考乘法路径）
+|   |-- forge.c           fixup（公钥恒等式）+ 伪造闭环 + 阴性对照
+|   |-- attack.py         zeta 域标记 LS（真值参数可选；含 selftest、矩估计）
+|   |-- score.py          独立评分脚本（真值对照与攻击分离）
+|   |-- diag.py           sigma_y / kappa / 噪声地板诊断
+|   |-- adaptive_stop.sh  自适应停止流水线（2.5e5 批 + fixup 判别，两密钥验证）
+|   |-- run_parallel.sh   N 进程并行流水线
+|   `-- remote_repro.sh   远端一键复现
+`-- artifacts/            恢复密钥、运行日志（sha256 记录在案）；真值隔离于 scoring/
+\end{verbatim}
+
+\begin{verbatim}
+bash adaptive_stop.sh keyA pk.bin sk.bin       # 自适应停止（推荐，1.25e6 典型闭合）
+bash run_parallel.sh                           # NS=2000000 W=16 全流程（保守上界）
+python3 attack.py selftest                     # 求解器自检（vs 稠密 LS）
+./forge fixup pk.bin recovered.bin && ./forge pk.bin recovered.bin 20
+\end{verbatim}
+
+环境：WSL Ubuntu-22.04，gcc 11.4，Python 3.10 + numpy。125 万条流水线：
+16 进程生成 $\sim$8 min $+$ 判定 $\sim$4 min $+$ 完成器 $\sim$1 min。
+
+\subsection{伦理声明}
+
+本作业为教学目的的密码分析，对象为课程提供的本地参考实现（授权上下文与此前 BiT-128
+审计一致）。攻击输入仅为公钥与公开签名；秘密密钥仅用于事后评分（真值对照）；无侧信道、
+无计时、无对签名设备的注入或干扰。
+
+\appendix
+
+\section{记号与参数}
+
+\begin{center}\small
+\begin{tabular}{@{}lll@{}}
+\toprule
+记号 & 含义 & DARTS-128 值 \\
+\midrule
+$n$, $q$, $\hat q$ & 环 $\mathbb Z_q[x]/(x^n{+}1)$ 的度、模、$2^{-1}$ & 512, 130817, 65409 \\
+$K$, $L$ & 隐藏/公开维数（$A=(A_0|A_1|I_K)$） & 1, 2 \\
+$s=(s_0,s_1,e)$ & 三元秘密（$T_p$，$p=0.15$） & 各 512 系数 \\
+$\tau$, $c$, $u(=\beta)$ & 挑战重量 / 稀疏挑战 / 单位向量 & 30, ---, $(1,0,\dots,0)$ \\
+$d$, $\Comp_d$, $W$ & 压缩位、高 $d$ 位取整、cell 宽 $q/2^d$ & 10, ---, 127.75 \\
+$B$, $B'$, $B_0$, $B''$ & 采样球/中球/小球/验证球半径 & 6049.79, 6046.76, 5858.47, 7500 \\
+$\sigma=1-2b$ & 双峰符号因子 & $\pm1$ \\
+$\kappa$, $\rho=1-\kappa$ & 拒绝采样条件化收缩及其补 & 实测 0.63 / 0.37 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\section{与 BiT-128 攻击的对照}
+
+\begin{center}\small
+\begin{tabular}{@{}lll@{}}
+\toprule
+ & BiT-128（hint 算子攻击） & 本工作（DARTS-128, 1-2b） \\
+\midrule
+标签来源 & $z_0$ 通道统计标签（$96.2\%$ 正确） & 双分支哈希判定（$100\%$ 正确，覆盖 $21\%$） \\
+恢复对象 & $s_0$ 精确 $+$ $(\hat e,\hat b_0)$ 验证等价 & $(s_0,s_1,e)$ 全部精确（字节级） \\
+数据量 & $4\times10^6$ 条 & $2\times10^6$ 条 \\
+标签率依赖 & 通道信噪比 & $1-(1-2^d/q)^\tau=21\%$（可解析预测） \\
+共同结构 & \multicolumn{2}{l}{hint 差分 $=$ 新鲜噪声 $+$ 密钥信号的一阶观测（同一算子定律）} \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\section{关键中间数据（本机 $10^5$ 诊断）}
+
+\begin{itemize}
+\item $\sigma_y$（$z_1$ 坐标实测）$=154.2$（球均匀理论 $154.3$）；
+\item 尺度 $\rho=\langle\hat s,s_{\mathrm{true}}\rangle/\langle s_{\mathrm{true}},s_{\mathrm{true}}\rangle=0.3734
+      \Rightarrow \kappa=0.6266$；
+\item 去尺度残差 rms $=0.2070$ vs 理论地板 $\sigma_y/\sqrt{N\tau}=0.1948$（LS 达最优）；
+\item $\hat s$ 直方图呈清晰三峰（$0/\pm\rho$），峰距 $1.8\sigma$（$10^5$ 时）
+      $\to 13\sigma$（$2\times10^6$ 时）。
+\end{itemize}
+
+\section*{参考文献与版本信息}
+
+\begin{enumerate}[label={[\arabic*]}]
+\item DARTS 提交包：NICCS/ICCS NGCC 一轮公钥密码候选（数字签名），DARTS-128 参数集，
+      参考实现目录 \code{DARTS128}（2026-09-20 归档版本）；本报告的算法更新仅涉及
+      \code{sign.c}（三处）、\code{poly.c}、\code{poly.h}（$(1-b)\to(1-2b)$ 修订与
+      验证双分支化）及 \code{fft.c}（\code{\_\_int64\_t} 修复），原文件以
+      \code{*.orig\_1b} 备份，逐文件 sha256 见 \code{artifacts/}。
+\item Z.~Xiong, M.~Wang. \emph{Design-Level Cryptanalysis of the ICCS NGCC
+      Round-1 Public-Key Candidates}. ePrint 2026/2232（2026-09-28 版；第 8 章
+      BiT: key recovery from a shared sign，SSD 去卷积）。
+\item BiT 提交包：NICCS/ICCS NGCC 一轮签名候选 sign-02（Bimodal Triangular）；
+      本仓库 BiT-128 审计（hint 算子路线）见 \code{BiT128\_public\_data\_attack/}。
+\item L.~Ducas, A.~Durmus, T.~Lepoint, V.~Lyubashevsky. \emph{Lattice Signatures
+      and Bimodal Gaussians}. CRYPTO 2013（ePrint 2013/383）。
+\item V.~Lyubashevsky. \emph{Fiat--Shamir with Aborts: Applications to Lattice and
+      Factoring-Based Signatures}. ASIACRYPT 2009；EUROCRYPT 2012（bimodal 扩展）。
+\item E.~Alkim, L.~Ducas, T.~Pöppelmann, P.~Schwabe. \emph{Post-quantum Key
+      Exchange---A New Hope}. USENIX Security 2016（uSVP 嵌入攻击估计）。
+\item The FPLLL/Lattice Estimator（Albrecht et al.），
+      \code{https://github.com/malb/lattice-estimator}——本文的 BDD/uSVP 成本引述
+      应以该工具复核。
+\end{enumerate}
+
+\noindent\textbf{复现环境与输入}：WSL Ubuntu-22.04（gcc 11.4，Python 3.10 + numpy
+1.21/1.26）；DARTS-128 参考实现按提交包 \code{Makefile} 流程编译；签名消息为 4 字节
+小端序计数器 \code{LE32(start+j)}；各批次 $(start,\,N)$ 见 \S7 与
+\code{artifacts/} 内日志。工件的 sha256 与逐批次清单见 \code{artifacts/}。
+
+\end{document}

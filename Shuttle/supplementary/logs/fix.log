@@ -1,0 +1,5 @@
+orig: b1=185.64 r0=185.64 r_last=0.0692
+rev-LLL 116s: b1=478.78 r0=478.78 r_last=0.0544
+unimod0-LLL 196s: b1=283.47 r0=283.47 r_last=0.0675
+unimod1-LLL 191s: b1=283.47 r0=283.47 r_last=0.0655
+unimod2-LLL 165s: b1=283.47 r0=283.47 r_last=0.0732

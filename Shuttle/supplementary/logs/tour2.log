@@ -1,0 +1,9 @@
+data=corr4m NSIG=4000000 C3=84.444
+cost(s_true)=6.1534e+08
+ORACLE true-u: dev_mean=0.1590 dev_max=0.498 WRONG=31 overlap=755/768
+  s2 new best 1.7393e+10 ov 307
+  s2 new best 1.6429e+10 ov 304
+  s2 new best 1.5873e+10 ov 309
+  s2 new best 1.5662e+10 ov 304
+  s2 new best 1.4828e+10 ov 305
+FINAL seed2 cost 1.4828e+10 overlap 305

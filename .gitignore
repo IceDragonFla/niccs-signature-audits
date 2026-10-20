@@ -1,0 +1,23 @@
+# LaTeX 编译中间文件（注意：Shuttle/supplementary/logs/ 下的 *.log 是有意
+# 入库的战役日志，因此不做 *.log 全局忽略；两个报告的 tex 日志按名忽略）
+*.aux
+*.toc
+*.out
+*.nav
+*.snm
+*.synctex.gz
+*.fls
+*.fdb_latexmk
+*.xdv
+*.bbl
+*.blg
+REPORT.log
+DARTS_1-2b_攻击报告.log
+
+# Python
+__pycache__/
+*.pyc
+
+# 系统垃圾
+.DS_Store
+Thumbs.db

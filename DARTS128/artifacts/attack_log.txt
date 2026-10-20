@@ -1,0 +1,18 @@
+--- total=2000000 clean=420453 (21.0%)
+noise sigma=0.0450 | alpha fits: s0=0.3621(150) s1=0.3779(162) e=0.3744(149) -> alpha=0.3744
+[R1 s0 (descaled)] |err|: max=0.3978 rms=0.1167 | exact-ternary after rounding: 512/512
+[R1 s1 (descaled)] |err|: max=0.4005 rms=0.1192 | exact-ternary after rounding: 512/512
+[R2 e (hint, descaled)] |err|: max=3.3762 rms=0.1946 | exact-ternary after rounding: 511/512
+[NEG s0 (coins)] |err|: max=1.0934 rms=0.5410 | exact-ternary after rounding: 362/512
+[NEG e (coins)] |err|: max=1.1019 rms=0.5402 | exact-ternary after rounding: 363/512
+[score] truth-based alpha = 0.3671
+
+branch tell: clean labels on 420453/2000000 signatures (21.0%); clean-label accuracy = 100.0000% (b=0 fraction overall 50.0%)
+noise sigma=0.0450 | alpha fits: s0=0.3621(150) s1=0.3779(162) e=0.3744(149) -> alpha=0.3744
+[R1 s0 (descaled)] |err|: max=0.3978 rms=0.1167 | exact-ternary after rounding: 512/512
+[R1 s1 (descaled)] |err|: max=0.4005 rms=0.1192 | exact-ternary after rounding: 512/512
+[R2 e (hint, descaled)] |err|: max=3.3762 rms=0.1946 | exact-ternary after rounding: 511/512
+[NEG s0 (coins)] |err|: max=1.0934 rms=0.5410 | exact-ternary after rounding: 362/512
+[NEG e (coins)] |err|: max=1.1019 rms=0.5402 | exact-ternary after rounding: 363/512
+[score] truth-based alpha = 0.3671
+wrote recovered.bin (s0|s1|e int8) — next: forge fixup <pk> recovered.bin; forge <pk> recovered.bin 20

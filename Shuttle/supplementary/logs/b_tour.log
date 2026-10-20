@@ -1,0 +1,7 @@
+LLL 453s
+beta=12 1tour clean 3.2s ||b1||=185.6
+beta=14 1tour clean 3.3s ||b1||=185.6
+terminate called after throwing an instance of 'std::runtime_error'
+  what():  infinite loop in babai
+beta=16 1tour ABORT 1.5s RuntimeError('Aborted')  <-- first failing beta
+peakRSS=500MB

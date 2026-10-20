@@ -1,0 +1,6 @@
+LLL done 325.3s
+after LLL: ||b1||=172.5  found=False
+terminate called after throwing an instance of 'std::runtime_error'
+  what():  infinite loop in babai
+BKZ-20 failed: RuntimeError('Aborted')
+total 329.6s

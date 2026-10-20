@@ -1,0 +1,181 @@
+% !TEX program = xelatex
+% CS-128 量化壁垒报告 — 编译: xelatex 两次
+\documentclass[UTF8,11pt,a4paper]{ctexart}
+
+\usepackage{amsmath,amssymb,bm}
+\usepackage{booktabs,array,tabularx,longtable}
+\usepackage[margin=2.3cm]{geometry}
+\usepackage{enumitem}
+\usepackage{xcolor}
+\setlist{itemsep=2pt,topsep=4pt}
+\usepackage[colorlinks=true,linkcolor=blue!55!black,urlcolor=blue!55!black,citecolor=blue!55!black]{hyperref}
+\usepackage{fancyhdr}
+
+\setmainfont{Cambria}
+\setmonofont{Consolas}
+\newcommand{\code}[1]{\texttt{\small #1}}
+\newcommand{\nats}{\ensuremath{\,\mathrm{nats}}}
+
+\pagestyle{fancy}\fancyhf{}
+\fancyhead[L]{\small CS-128 学习型密钥恢复的量化壁垒}
+\fancyhead[R]{\small\thepage}
+\renewcommand{\headrulewidth}{0.3pt}
+
+\title{\vspace{-1.2cm}\textbf{CS-128 学习型密钥恢复的量化壁垒：\\对称接受采样下的信息测定}}
+\author{GLM-5.3 Max \and JY Liu}
+\date{2026 年 10 月 19 日}
+
+\begin{document}
+\maketitle
+\thispagestyle{fancy}
+
+\begin{abstract}\noindent
+CS-128 是 NICCS 首轮征集的 BLISS 式格签名候选，其签名响应使用分块共享的双模符号位。
+我们研究了仅凭公开签名的学习型密钥恢复，结论是一个\textbf{量化的否定}：方案的潜变量
+结构真实存在——若观察者拥有完美的符号标签，坐标误差语义下 7.6 万条签名即达恢复门限
+（解码语义下约 $4.8\times10^5$ 条，oracle 闭合实验已完整恢复）；但对称拒绝采样把标签
+信息压到接近零——实测标签准确率 52.6\%（抛硬币水平），半分相关 $-0.0002$ 落在零假设
+区间内。信息并非严格为零：精确接受模型给出每签名 $+0.180 \pm 0.023$\nats 的对数似然
+比（$8\sigma$ 显著），外加 0.19\%/块的范数边界确定性揭示；由此，贝叶斯最优分类器需要
+约 $2\times10^6$ 条签名，实际可达的标签器需要约 $3\times10^8$ 条。二阶矩路线被独立
+关闭：实测估计量方差给出所需样本量 $4.0\times10^{10}$（中位）至 $4.7\times10^{12}$
+（p90）。CS-128 的安全性完全押在接受采样的对称性上——这不是一句定性评语，而是被逐
+通道测定过的事实。
+
+\medskip\noindent\textbf{Abstract.}
+CS-128 is a BLISS-style lattice signature candidate with blocked shared bimodal
+sign bits. We study public-data-only learning attacks and obtain a quantified
+negative result. The latent structure is real: with perfect sign labels, 76,000
+signatures suffice in coordinate semantics (and $4.8\times10^5$ in decode
+semantics, closed by a full oracle recovery). But symmetric rejection sampling
+hides the labels: measured label accuracy is 52.6\% (coin level) and the
+split-half correlation $-0.0002$ lies within the null. The information is not
+exactly zero---an exact acceptance-model LLR of $+0.180\pm0.023$ nats per
+signature ($8\sigma$), plus a 0.19\%-per-block norm-bound revelation---so a
+Bayes-optimal classifier would need ${\sim}2\times10^6$ signatures and any
+practically constructible one ${\sim}3\times10^8$. The second-moment route is
+separately closed: measured estimator variances give required sample sizes of
+$4.0\times10^{10}$ (median) to $4.7\times10^{12}$ (p90). The security of CS-128
+rests entirely on the symmetry of its acceptance sampling---and this is a
+measured fact, not an opinion.
+\end{abstract}
+
+\section{对象与问题设定}
+
+CS-128 的签名侧在分块共享的双模符号位上运行（BLISS 一族的标准形态——正是 BiT-128 被
+攻破的同族结构），并以对称的拒绝采样保证发布分布的边缘不可区分性。问题因此明确：
+\textbf{双模符号位的标签 $b$ 在多大程度上可以从公开签名中读出？}如果标签可读，BiT 式
+的标记最小二乘即可恢复密钥；如果不可读，需要回答差多少。
+
+研究工具是 umodel 通用恢复框架（仓库顶层 \code{umodel/}）：SchemeSpec 声明式地登记环
+代数、掩码模型、通道清单与公钥关系，引擎与解码阶梯只读规范。框架的适用性闸门
+（\code{check\_applicability}）对未推导的组合显式拒绝并给出理由——本报告的否定结论
+全部经由该闸门产出，而不是跑出噪声后人工解释。
+
+\section{正结果：潜变量结构存在}
+
+oracle 臂给出结构性答案：若标签 $b$ 由插桩侧车提供（审计数据，攻击者不可用），坐标
+误差语义下 7.6 万条签名即达恢复门限，解码语义下约 $4.8\times10^5$ 条——v14 的 oracle
+闭合实验在 50 万条新鲜 dump 上以 oracle 块符号完成了完整密钥恢复（分块 WLS $\to$
+$\sigma \approx 0.195 \to$ 窗口解码 $\to$ 全解验收，对真值逐项通过）。这些数字的意义
+是\textbf{信息论参照系}：CS-128 的双模结构本身不提供安全性，安全性只能来自标签的
+不可读性。这与 BiT-128 形成直接对照——同族结构、同样的 oracle 通道，BiT 的标签准确率
+96.19\% 而此处 52.6\%。
+
+\section{卡点：对称接受采样}
+
+实测（20 万条真实签名，参考实现插桩 dump）：标签准确率 52.6\%；assay 半分相关
+$-0.0002$，零假设预期 $+0.0005$——公开统计量中无可检测的 $b$ 相关信号。框架闸门据此
+拒绝标签路线。此处值得记录一个方法论细节：早期我们曾用一条 $z_1$ 回归统计量得出
+``信号饱和''的结论，后来在 BiT 上发现同类统计量的构造伪象（见 BiT128 报告~\S8）；
+对 CS-128 我们改用多通道测定（\S4--\S5），避免单一统计量的判决。
+
+\section{信息测定：不是零，是多少}
+
+精确接受模型（对拒绝采样条件化的逐块似然）给出严格量化：
+\begin{itemize}
+\item \textbf{LLR 信息}：$+0.180 \pm 0.023$\nats/签名（$8\sigma$）。对称接受并不完美
+  ——这是一个非零但极弱的信号。
+\item \textbf{范数边界揭示}：0.19\%/块的确定性揭示，构成第二条信息源。
+\item \textbf{严格 $(z_0, z_1)$ 通道信息}：$+0.122 \pm 0.032$\nats/签名；$y_2$ 层
+  边缘化后，总信息被括在 $[0.12, 0.18]$\nats/签名。
+\end{itemize}
+换算为所需签名数：
+
+\begin{table}[htbp]\centering\small
+\begin{tabular}{@{}lc@{}}
+\toprule
+分类器 & 所需签名数 \\
+\midrule
+完美标签（oracle 参照） & $7.6\times10^4$（坐标语义） \\
+贝叶斯最优（理论极限） & ${\sim}2\times10^6$ \\
+实际可达标签器 & ${\sim}3\times10^8$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+``实际可达''与``贝叶斯最优''之间两个数量级以上的差距，正是对称接受采样的安全余量
+所在：构造接近最优的分类器本身需要密钥信息——鸡生蛋结构。
+
+\section{二阶矩路线的独立关闭}
+
+不经标签、直接用二阶统计量估计秘密的路线被实验精确关闭：实测估计量方差给出
+$\mathrm{required\_N} = 4.0\times10^{10}$（中位）/ $4.7\times10^{12}$（p90）；同一
+引擎的掩码模型给出掩码受限口径 $5.9\times10^8$。三组数字同向，二阶矩路线在可预见的
+数据量下无望。
+
+\section{实现层核查与一次更正}
+
+参考实现的打包格式（rANS $+$ SM3 CTR-DRNG）被按位移植为纯 Python 解码器，对捕获的
+签名整包验证 200/200——所有统计测定建立在正确的字节语义上。
+
+我们曾报告参考实现的一处``对齐移位未定义行为''，\textbf{该发现已撤回}：那是我们插桩
+printf 的格式串错位，参考二进制中移位计数从未超过 2。真实的实现偏离是定点舍入，已
+按位移植（对捕获的接受检验值 240/240 位精确），且不改变信息界：实际实现 LLR
+$+0.182 \pm 0.028$，对意图模型 $+0.180 \pm 0.023$。如实记录，因为它说明插桩本身的
+误差可以伪装成实现缺陷——审计者应当对自己的仪器保持与对被审计对象同等的怀疑。
+
+\section{判定语义}
+
+本报告的结论形态是``拒绝 $+$ 理由''，不是``跑完无结果''。umodel 的判定矩阵把四类输入
+区分开：BiT-128（信号存在，恢复完成）、CS-128（信号存在但极弱，本文）、COMPASS-SIG-128
+（信号被接受条件化消除，见其报告）、掩码受限形态。区分``弱''与``零''不是修辞——前者
+随数据量增长终将可攻（$3\times10^8$ 条），后者在任何数据量下都不可攻，二者的防御含义
+完全不同。
+
+\section{下一步工作}
+
+\begin{enumerate}
+\item \textbf{逼近贝叶斯最优的标签器}。$2\times10^6$ 是理论底线；任何把标签准确率从
+  52.6\% 显著抬起的构造（例如联合多块的条件似然、范数揭示的显式利用）都会等比压缩
+  所需数据量。这是 CS-128 上唯一有理论明确收益的进攻方向。
+\item \textbf{新泄露通道}。学习路线的壁垒测定完毕后，剩余的攻击面在实现层（侧信道、
+  故障）与格归约层（公钥本身）——前者超出公开数据约束，后者是方案安全声称的正面
+  战场，均非本框架范围。
+\item \textbf{接受对称性的形式化}。``对称接受采样把标签信息压到 $\varepsilon$''目前
+  是测定值而非定理；给出 $\varepsilon$ 的上界证明（或找到更紧的下界构造）是有独立
+  价值的开放问题。
+\end{enumerate}
+
+\section{复现指南}
+
+全部实验脚本位于仓库顶层 \code{umodel/}（\code{cs\_*} 前缀），与本报告结论的逐条对应
+见 \code{code/README.md} 的索引表。运行方式：
+\begin{verbatim}
+python3 umodel/selftest.py        # 29 项数值自测（含 CS 潜变量信息测定）
+python3 umodel/<脚本名>.py        # 各专项脚本，入口处有参数说明
+\end{verbatim}
+需要强调数据边界：真实签名 dump（插桩侧车含 $b$ 真值）属本地审计数据，不入库；各脚本
+在数据缺失时自动跳过对应演示并打印原因。公开可复现的部分包括：解码器正确性（对自生成
+数据）、接受模型 LLR 的计算、所需样本量的预测管线与全部自测。
+
+\section*{参考文献}
+\begin{enumerate}[label={[\arabic*]}]
+\item L.~Ducas, A.~Durmus, T.~Lepoint, V.~Lyubashevsky. \emph{Lattice Signatures and
+  Bimodal Gaussians}. CRYPTO 2013（ePrint 2013/383）.
+\item V.~Lyubashevsky. \emph{Fiat--Shamir with Aborts}. ASIACRYPT 2009（拒绝采样
+  对称性的构造源头）.
+\item CS 提交包：NICCS 首轮数字签名候选.
+\end{enumerate}
+
+\end{document}

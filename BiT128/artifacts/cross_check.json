@@ -1,0 +1,60 @@
+{
+ "checks": {
+  "fft_R_equals_b0_minus_e": true,
+  "X1_key_identity": {
+   "stageE_oracle_sha": "4191a44b4bf1e081175986302b0d30605bb86f827dbe02c80d90ef7f704d5a11",
+   "hint_oracle_sha": "4191a44b4bf1e081175986302b0d30605bb86f827dbe02c80d90ef7f704d5a11",
+   "hint_attack_sha": "4191a44b4bf1e081175986302b0d30605bb86f827dbe02c80d90ef7f704d5a11",
+   "stageE_equals_hint_oracle": true,
+   "hint_oracle_equals_hint_attack": true
+  },
+  "X2_replication_2M": {
+   "tag": "real+sim1m",
+   "N": 2000000,
+   "s_row": [
+    0.936,
+    0.932,
+    0.935
+   ],
+   "direct_wrong": {
+    "0": 0,
+    "1": 0,
+    "2": 0
+   },
+   "stages": [],
+   "nbad_final": 0,
+   "s0_exact": true,
+   "key_sha": "4191a44b4bf1e081175986302b0d30605bb86f827dbe02c80d90ef7f704d5a11"
+  },
+  "X2_key_equals_main": true,
+  "X4_algebra": {
+   "algebra_identity_holds": true,
+   "e_hat_in_range": true,
+   "b0_hat_in_range": true,
+   "s0_matches_truth": true,
+   "e_hat_nonzero": 26
+  },
+  "X5_blocking": {
+   "block_independence_deterministic_arms": true,
+   "perm_arm_differs_expected": true
+  },
+  "X6_cross_dataset": {
+   "real_scales": [
+    0.934,
+    0.932,
+    0.938
+   ],
+   "sim3m_scales": [
+    0.936,
+    0.932,
+    0.932
+   ],
+   "rounded_agreement": "761/768",
+   "per_row_corr": [
+    0.9990014285464717,
+    0.9991229289027065,
+    0.9987261469251376
+   ]
+  }
+ }
+}

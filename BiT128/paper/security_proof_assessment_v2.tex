@@ -1,0 +1,645 @@
+% !TEX program = xelatex
+\documentclass[11pt,a4paper]{ctexart}
+\usepackage[margin=2.3cm]{geometry}
+\usepackage{amsmath,amssymb}
+\usepackage{booktabs}
+\usepackage{xcolor}
+\usepackage[colorlinks=true,linkcolor=blue!55!black,urlcolor=blue!55!black]{hyperref}
+\usepackage{fancyhdr}
+\usepackage{tcolorbox}
+\tcbuselibrary{skins,breakable}
+\pagestyle{fancy}\fancyhf{}
+\fancyhead[L]{\small NICCS 算法安全性证明与安全强度估算深度评估}
+\fancyhead[R]{\small\thepage}
+\newtcolorbox{keybox}[1][]{colback=blue!4,colframe=blue!55!black,title={#1},fonttitle=\bfseries,breakable}
+\newtcolorbox{warnbox}[1][]{colback=orange!5,colframe=orange!60!black,title={#1},fonttitle=\bfseries,breakable}
+\newtcolorbox{gapbox}[1][]{colback=red!4,colframe=red!50!black,title={#1},fonttitle=\bfseries,breakable}
+
+\title{\bfseries NICCS 候选算法安全性证明与安全强度估算深度评估\\[0.3em]
+\large 七方案对比：Aigis-Sig+ / NEV / FLIT / DTRU / ZEN / BiT / COMPASS}
+\author{Jy L}
+\date{2026 年 10 月 14 日}
+
+\begin{document}
+\maketitle
+\tableofcontents
+
+\begin{keybox}[摘要]
+本报告对七个 NICCS 候选算法的安全性证明和安全强度估算进行深度评估，
+并对 FLIT、DTRU、ZEN、NEV 四卷 KEM 的安全强度声称值做了
+\textbf{工具级独立复现}（各方案引用的 estimator 及其钉住的 commit）。
+核心发现：
+(1) \textbf{声称值总体可复现}——按设计文档参数与参考实现约定，
+14 套推荐参数中 13 套与公共工具一致（容差 $\le 4$ bits，
+其中 5 套 $\beta$ 或 $\log_2$\texttt{rop} 精确一致）；
+(2) \textbf{关键机制：estimator 搜索域上限}——
+\texttt{max\_beta}$=1754$（源码注释：对应至多 512-bit 等级），
+超出该等级的声称（Flit-512、ZEN-512 NTRU、NEV-R3 等 6 套）
+在默认配置下返回 \texttt{rop}$=\infty$，易误读为「不可行」；
+进程内将上限提至 2200 后由优化器直接复现（Flit-512 得 550.42
+vs 声称 550.4，ZEN-512 NTRU 526.18 vs 526.2，NEV-R3 583.7 vs
+583）；唯一实质残差是 DTRU-648 的 15.7 bits 未解释差异
+（$\sigma^2{=}2$ 可得 163.8$\approx$164，反解不唯一，不作因果
+结论）——均不构成可利用攻击；
+(3) \textbf{文档与实现的一致性风险}：FLIT 规范散文的分布约定
+与其 Algorithm 2、参考实现、安全表互相矛盾（实现按每符号
+$\sigma$，散文写占比），按散文口径复现会低估其安全性
+13--26 bits；
+(4) \textbf{声称口径异质}：四方案分别以 MATZOV 最小值 / CoreSVP
+最小值 / CoreSVP NTRU-primal / 脚本经典值为头条，直接对比产生
+10--15 bits 伪差距；
+(5) 安全性证明的拒绝采样处理仍是分水岭——从 BiT 的证明缺口
+（被我们实证攻破）到 COMPASS 的未刻画效应（意外增强安全性）
+再到 Aigis 的 entropic RS（正确处理）。
+\end{keybox}
+
+\section{评估范围与方法}
+
+\subsection{七方案概览}
+
+\begin{table}[htbp]\centering\small
+\begin{tabular}{@{}lllll@{}}
+\toprule
+方案 & 类型 & 底层问题 & 团队 & 我们的角色 \\
+\midrule
+Aigis-Sig+ & 签名 & AMLWE/AMSIS & — & 证明基准 \\
+NEV & KEM & NTRU/sspRLWE & — & 估算基准 \\
+FLIT & KEM & NTRU+RLWE & 潘彦斌等 & 深度分析 \\
+DTRU & KEM & NTRU(E8) & 赵运磊等 & 深度分析 \\
+ZEN & KEM & NTRU & 路献辉等 & 深度分析 \\
+BiT & 签名 & MLWE & — & \textbf{已攻破} \\
+COMPASS & 签名 & MLWE/MSIS & — & \textbf{信号消除} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\section{安全性证明对比}
+
+\subsection{证明架构统一性}
+
+所有七个方案的证明遵循同一骨架（FSwA/FO + Decision 假设 + 不紧的 CCA/SUF 提升），
+但紧性和完整性差异显著。
+
+\begin{table}[htbp]\centering\small
+\begin{tabular}{@{}llllll@{}}
+\toprule
+ & Aigis-Sig+ & NEV & FLIT & DTRU & ZEN \\
+\midrule
+模型 & QROM+ROM & QROM+ROM & QROM & ROM+QROM & QROM \\
+CPA/OW & 紧（$\times 2$） & 紧（$=$） & 紧 & 紧 & 紧 \\
+CCA/SUF & $\sim 2q$ & $\sim 2q$ & $\sim 2q$ & $\sim 2q$ & $\sim 2q$ \\
+完整性 & 完整 & 完整 & 完整 & \textbf{引用} & 完整 \\
+拒绝处理 & Entropic & $\delta$（DFR） & DFR & $\delta$ & $\delta$+boosting \\
+新假设 & SelfT-AMSIS & sspRLWE & — & — & — \\
+非标环 & — & — & — & \textbf{三循环/LPPNF} & — \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{关键发现：三种拒绝处理策略}
+
+\begin{keybox}[拒绝采样证明处理的分水岭（扩展版）]
+\begin{enumerate}
+\item \textbf{Aigis（Entropic RS）}：更严格的 $r$-拒绝（$\gamma_2 - \beta_2 - 1$）
+      允许将 $w = Ay$ 替换为 $w = Ay + e$（AMLWE 伪随机），
+      将统计 min-entropy 转化为计算假设。$\to$ 近紧证明。
+\item \textbf{NEV（显式 DFR）}：解密失败率 $\delta$ 作为 FO 变换的显式参数，
+      QROM 损失含 $4(q_H+2)\sqrt{\delta}$ 项。DFR 分析采用最坏情形
+      联合界（无独立性假设）。$\to$ 保守但完整。
+\item \textbf{FLIT/DTRU/ZEN（DFR + 独立性假设）}：均假设系数独立
+      （继承 Kyber 脚本），DTRU 承认这是``开放问题''。
+      ZEN 改进为分组联合界但仅用于精确表——实际数值用更松的
+      投影尾部上界。$\to$ 实用但不保守。
+\end{enumerate}
+\end{keybox}
+
+\section{安全强度估算：模型依赖性分析}
+
+\subsection{三种成本模型的差异}
+
+\begin{table}[htbp]\centering\small
+\begin{tabular}{@{}llll@{}}
+\toprule
+模型 & 经典系数 & 量子系数 & 使用者 \\
+\midrule
+CoreSVP & 0.292$\beta$ & 0.257$\beta$ & NEV（主）、ZEN（保守）、FLIT（对照） \\
+MATZOV & 0.292$\beta$ + poly & 0.2563$\beta$ + poly & FLIT（主）、NEV（对照） \\
+Progressive & 0.292$\beta$ & 0.2563$\beta$ & DTRU（唯一） \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{warnbox}[核心发现：同参数不同模型可差 15+ bits]
+FLIT-128 的 CoreSVP 经典安全性为 118.8 bits，MATZOV 为 134.0 bits——
+差 15.2 bits。DTRU 使用第三种模型（progressive sieving），其数值与
+前两者\textbf{不可直接比较}。三个方案的声称值建立在\textbf{三种不同的
+成本模型}之上，但 NICCS 的安全等级标签（128/256/512）未指明模型。
+\end{warnbox}
+
+\subsection{逐方案估算审查}
+
+\subsubsection{FLIT（潘彦斌等）}
+
+\begin{table}[htbp]\centering\small
+\begin{tabular}{@{}lrrrrr@{}}
+\toprule
+ & $n$ & $q$ & 声称C & CoreSVPC & MATZOVC \\
+\midrule
+Flit128 & 512 & 769 & 134.0 & \textbf{118.8} & 134.0 \\
+Flit256 & 1024 & 769 & 269.5 & 267.2 & 269.5 \\
+Flit512 & 2048 & 3329 & 529.1 & 550.4 & 529.1 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{gapbox}[FLIT 安全强度问题]
+\begin{enumerate}
+\item \textbf{Flit128 的 CoreSVP 低于 128-bit 等级标签}：其自报
+      CoreSVP 118.8（$\beta{=}407$，我们已逐位复现，见
+      第~\ref{sec:repro}~节），头条声称 134.0 是 MATZOV 口径。
+      另注意其 spec 散文与实现的 $T$ 约定矛盾
+      （第~\ref{sec:repro}~节勘误项 1）：按散文口径 CoreSVP
+      会再低 13 bits。
+\item \textbf{Flit-512 的声称值不可复现}：$(3570, 1885)$ 在
+      每符号（实现）约定下被公共 estimator 判 primal 不可行，
+      占比约定下 $\beta{=}1733$，均对不上（详见
+      第~\ref{sec:repro}~节残差表）。
+\item \textbf{无失败增强分析}：DFR $\ne 0$ 但未使用 directional
+      bootstrapping 框架（不同于 ZEN 和 NEV）。
+\end{enumerate}
+\end{gapbox}
+
+\subsubsection{DTRU（赵运磊等）}
+
+\begin{table}[htbp]\centering\small
+\begin{tabular}{@{}lrrrr@{}}
+\toprule
+ & $n$ & $q$ & 声称C & 声称Q \\
+\midrule
+DTRU-648 & 648 & 3457 & 164 & 144 \\
+DTRU-768 & 768 & 3457 & 198 & 174 \\
+DTRU-1024 & 1024 & 3457 & 271 & 238 \\
+DTRU-2048 & 2048 & 3457 & 567 & 498 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{gapbox}[DTRU 安全强度问题]
+\begin{enumerate}
+\item \textbf{非标准环}：三循环环 $\mathbb{Z}_q[x]/(x^n - x^{n/2} + 1)$
+      无最坏情况归约保证（不同于 2 幂循环环）；LPPNF 素数度环被定位为
+      ``保守防御''，暗示对主实例的结构性风险的承认。
+\item \textbf{独用 progressive 模型}：与 FLIT/ZEN/NEV 使用的模型不同，
+      声称值不可横向比较。
+\item \textbf{DFR 独立性假设公开承认}：引用 [LS25, PJH+25]，
+      最坏情形仅用``估计''的 $2^{20}$ 因子上界。
+\item \textbf{CBD $\eta=1$}：多个参数集使用 CBD-1（方差 1/2），
+      文档自身的``大多数参数 CBD 至少 2''的对冲暴露了这一弱点。
+\end{enumerate}
+\end{gapbox}
+
+\subsubsection{ZEN（路献辉等）}
+
+\begin{table}[htbp]\centering\small
+\begin{tabular}{@{}lrrrrrr@{}}
+\toprule
+ & $n$ & $q$ & CoreSVPC & MATZOVC & 目标 & 余量 \\
+\midrule
+ZEN-128 & 512 & 769 & 128.5 & 148.7 & 128 & \textbf{+0.5} \\
+ZEN-256 & 1024 & 769 & 257.5 & 272.0 & 256 & \textbf{+1.5} \\
+ZEN-512 & 2048 & 769 & 519.9 & 530.5 & 512 & +7.9 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{gapbox}[ZEN 安全强度问题]
+\begin{enumerate}
+\item \textbf{CoreSVP 余量极薄}：ZEN-128 仅 +0.5 bits，ZEN-256 仅
+      +1.5 bits。任何对 sieving/dual 估计的收紧都会击穿声称。
+\item \textbf{最优攻击是有争议的对偶-混合}：文档承认 estimator 的
+      dual\_hybrid 遵循 Ducas--Pulles 有争议的启发式（他们保留它作为
+      ``保守冗余''），但实际 headline 数字\textbf{依赖}这一争议模型。
+\item \textbf{DFR 余量 0.3 bits}：ZEN-128 的 DFR = $2^{-128.3}$，
+      对 $2^{-128}$ 要求仅 0.3 bits 余量。
+\item \textbf{无盐 FO}：多目标攻击以 $\sim$(\#预计算 $\times$ \#目标)/$|\mathcal{M}|$
+      缩放（FrodoKEM 分析），被承认但推迟。
+\end{enumerate}
+\end{gapbox}
+
+\subsubsection{NEV（基准）}
+
+NEV 在估算方法论上最保守：
+\begin{itemize}
+\item 同时报告 CoreSVP 和 MATZOV，\textbf{以 CoreSVP 为主}
+\item DFR 使用最坏情形联合界（无独立性假设）
+\item QROM 损失显式给出（含 $\sqrt{\delta}$ 项的定量讨论）
+\item 新假设 sspRLWE 有 DRLWE 归约（$\sqrt{3}$ 噪声膨胀）
+\end{itemize}
+
+\textbf{但}NEV 的结构与其他方案不同（NTRU vs NTRU+RLWE 混合 vs E$_8$ 编码），
+其方法论不能直接套用——需要\textbf{结构适配}：
+\begin{itemize}
+\item NEV 的 sspRLWE 归约仅覆盖 Gaussian 噪声，binomial 情形未证明
+\item FLIT/DTRU/ZEN 的 RLWE 分量需要单独估计（NEV 无此结构）
+\item DTRU 的非标准环需要额外的结构性分析
+\end{itemize}
+
+\section{估算代码可复现性}
+
+\begin{table}[htbp]\centering\small
+\begin{tabular}{@{}llll@{}}
+\toprule
+方案 & 代码位置 & 工具 & 可复现性 \\
+\midrule
+Aigis-Sig+ & 不随包 & CoreSVP+MATZOV & 低 \\
+NEV & 不随包 & CoreSVP+MATZOV & 低 \\
+FLIT & 外部 gitcode & 自定义脚本 & 中 \\
+DTRU & 不随包 & Kyber脚本 & 低 \\
+ZEN & 不随包 & estimator+COSIC & 低 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{warnbox}[复现性障碍：不是算力，是输入不可知]
+所有七个方案的估算代码均\textbf{不随提交包提供}（引用外部工具与
+commit 号）。我们完整的复现实践（第~\ref{sec:repro}~节）表明，
+真正的复现成本不在计算——全部攻击路径（primal/dual/dual\_hybrid
+$\times$ CoreSVP/MATZOV，含钉住的历史 commit checkout）在
+16 核服务器上以秒--分钟级完成——而在\textbf{还原估算输入}：
+\begin{enumerate}
+\item 参数表记号的歧义（FLIT 的 $T$ 约定散文与实现矛盾，
+      见第~\ref{sec:repro}~节）；
+\item 分布到工具输入的映射（ZEN 的和分布 $B_1{+}S_{3/32}$
+      需构造方差匹配代理）；
+\item 工具版本漂移（不同 commit 的 uSVP 成功条件、dual 模型
+      有实质差异）。
+\end{enumerate}
+这些障碍只有随包提供估算脚本（参数、版本、映射三要素齐全）
+才能消除。
+\end{warnbox}
+
+\section{与我们实证攻击的交叉验证}
+
+\begin{keybox}[证明 $\leftrightarrow$ 攻击的完整对应]
+\begin{tabular}{lll}
+方案 & 证明特征 & 实证结果 \\
+\midrule
+BiT & 完美ZK假设（忽略条件信息） & \textbf{完整密钥恢复}（4M签名） \\
+COMPASS & $w_1$一致性视为效率参数 & \textbf{信号消除}（安全但非预期） \\
+CS & 对称接受 & oracle通道恢复成功；公开通道被冷启动壁垒阻挡 \\
+Aigis & Entropic RS & 未测试 \\
+NEV & 最保守估算 & 未测试（KEM） \\
+FLIT & CoreSVP 118.8 $<$ 128 标签 & 未测试（KEM） \\
+\end{tabular}
+\end{keybox}
+
+
+\section{安全强度估算复现（实际运行）}\label{sec:repro}
+
+\subsection{各方案文档中描述的估算方法}
+
+\subsubsection{FLIT}
+
+\textbf{文档位置}：Algorithm specification.pdf, Sec.~3 (Security Analysis), pp.14--19; Table 4 (CoreSVP) p.18, Table 5 (MATZOV) p.19.
+
+\textbf{方法}（Sec.~3.2.3 原文，两段逐字摘录）：
+\begin{quote}\small
+``Building on our analysis, we use the Lattice Estimator [2] (commit \texttt{6019056}) to derive concrete security parameters for Flit.''\\[0.3em]
+``The estimates in Table 3 are obtained using the MATZOV [16] model for BKZ cost estimation, which is the default cost model in the version of the Lattice Estimator employed. We take the minimum value across all attack strategies (RLWE and NTRU, classical and quantum) as our final stated security level for each parameter set''
+\end{quote}
+NTRU 视为 $b{=}0$ 的 RLWE 特例（Sec.~3.2.2）；对偶攻击不适用于 NTRU。
+
+\subsubsection{DTRU}
+
+\textbf{文档位置}：Algorithm specifications.pdf, Sec.~3.2, pp.11--14; Table 1 p.12.
+
+\textbf{方法}（Sec.~3.2.1 与 3.2.3 原文，逐字摘录）：
+\begin{quote}\small
+``To evaluate the security strength of the RLWE problem, we adopt the Core-SVP framework and analyze various attack methodologies.''\\[0.3em]
+``We employ the aforementioned attack methodologies to evaluate the security strength of the DTRU scheme using the Python script from [SAB$+$20]. Note that our estimate of the security strength is based on the model with classical progressive coefficient 0.292 and quantum progressive coefficient 0.2563.''
+\end{quote}
+NTRU $\to$ LWE（零目标）；Kannan/Bai--Galbraith 嵌入 + BKZ + GSA。
+
+\subsubsection{ZEN}
+
+\textbf{文档位置}：Algorithm\_specifications.pdf, Sec.~5.5 (Practical Security), pp.21--22; Table 1 p.22, Table 3 p.32.
+
+\textbf{方法}（Sec.~5.5 原文，逐字摘录；脚注 1 指向
+\texttt{malb/lattice-estimator} 最新 commit \texttt{3e48ef4}）：
+\begin{quote}\small
+``We employ the lattice estimator of [3] to derive practical security parameters for ZEN. This tool provides strength estimates for both Ring-LWE and NTRU instantiations. For each attack strategy, we compute its computational cost and adopt the minimum value as the practical security level. [...] the estimator is run under both the MATZOV and CoreSVP (ADPS16) BKZ cost models. In this document, CoreSVP is treated as the more conservative model, since it suppresses polynomial factors when computing BKZ costs.''
+\end{quote}
+RLWE 运行 lattice/BKW/algebraic/hybrid；NTRU 无对偶攻击，
+另含 dense-sublattice 攻击。
+
+\subsubsection{NEV}
+
+\textbf{文档位置}：算法文本：NEV.pdf, Sec.~8.2--8.4, pp.53--54; Table 6 p.54（PDF 页 56--57）.
+
+\textbf{方法}（Sec.~8.2 与 8.4 原文，逐字摘录）：
+\begin{quote}\small
+``We adopt the latter approach for concrete estimates of our NTRU problem''\\[0.3em]
+``to obtain a conservative overall security estimation for NEV under the nine concrete parameter sets, we enumerate all possible values of $m$ and $b$.''\\[0.3em]
+``the concrete security estimates against MATZOV$\dagger$ are derived from a code that modifies the publicly available implementation by Carrier et al. [...] For comparison, we also provide the figures against the original MATZOV attack given by the LWE estimator.''
+\end{quote}
+即：NTRU 当作 RLWE 实例（移位格上 BDD）估计；穷举 $(m, b)$
+取保守最小；MATZOV$\dagger$ 来自修改的 Carrier 代码；
+原版 MATZOV 对照列才来自公共 LWE estimator。Table 6 的
+sec 值按 $0.292b$（CoreSVP 惯例）换算。
+
+\subsection{我们的复现：两阶段}
+
+\subsubsection{第一阶段（初版，含建模错误的探索性复现）}
+
+初版复现使用 lattice-estimator master + \texttt{primal\_usvp}（CoreSVP），
+对四卷方案统一用「固定重量稀疏三值秘密 + 同分布噪声」建模，
+NEV 按 $n{=}1409$ 环次数理解，DTRU 用 $\sigma{=}\sqrt{1/2}$。
+结果与声称值差 $-18 \sim -44$ bits，NEV R1/R3 出现
+$+174/-302$ bits 的异常。当时将其归因于「NTRU$\to$LWE 建模差异」。
+
+\subsubsection{回到设计文档：参数勘误}
+
+逐卷核对四份设计文档的参数表后发现，\textbf{初版差距的主要来源是我们
+自己的参数错误}，而非方案估算有误：
+
+\begin{enumerate}
+\item \textbf{FLIT}（spec Table 2, p.13 + Algorithm 2, p.6 + 参考实现
+      \texttt{params.h}）：经三方核对，$T$ 是采样器的\textbf{每符号概率}
+      $\sigma$（$\Pr[\pm 1]{=}\sigma$ 各取，方差 $2T$）——Algorithm 2
+      的样例（$\sigma{=}5/32$）与参考实现 \texttt{params.h}
+      （Flit256: \texttt{PF=15625} 即 $\sigma{=}5/32$）一致。
+      Table 2 散文「nonzero 系数占比」与二者矛盾（实际占比 $=2T$），
+      系文档笔误。初版复现按散文读法且秘密噪声取同重，方差低估 $2\times$。
+\item \textbf{ZEN}（spec Table 3, p.32）：$S_a$ 定义为
+      $\Pr[\pm 1]{=}a$ \textbf{各取}（方差 $= 2a$），且实际分布是
+      CBD 与稀疏三值的\textbf{和}（如 $B_1{+}S_{3/32}$）。
+      初版方差普遍减半、分布族错误。
+\item \textbf{NEV}（spec Table 2, p.22）：\textbf{1409 是 R 系列的模数
+      $q$，不是环次数}。真实参数为
+      R1: $n{=}512,q{=}1409,B_3$；R2: $n{=}1024,q{=}1409,B_2$；
+      R3: $n{=}2048,q{=}1409$, 密钥 $T_{1/3}$、加密 $r{\sim}T_{1/3},
+      e{\sim}B_2$。初版的 $q{=}4673/7681/12289$ 系误读。
+      （$T_{1/3}$ 在 NEV 记号中 $= U(\{-1,0,1\})$，方差 $2/3$。）
+\item \textbf{DTRU}（spec Table 1, p.6）：脚本应喂\textbf{秘密的}
+      $\sigma{=}\sqrt{k_r/2}$（$k_r$ 为 CBD 参数）。
+      初版用了 $\sqrt{1/2}$。
+\end{enumerate}
+
+\subsubsection{第二阶段（勘误后复现）设置}
+
+\begin{itemize}
+\item \textbf{工具与版本}：lattice-estimator \textbf{master}、以及各方案
+      钉住的 commit（FLIT@\texttt{6019056}、ZEN@\texttt{3e48ef4}），
+      分别 checkout 后运行
+\item \textbf{约定裁决}：分布记号有歧义时以\textbf{参考实现}为准
+      （FLIT 的 $T$ 以 \texttt{params.h}+采样器裁决为每符号
+      $\sigma$，方差 $2T$；两种读法均单独测试）
+\item \textbf{分布代理}：$B_\eta \to$ \texttt{CenteredBinomial}；
+      $S_a/T_a \to$ \texttt{SparseTernary}（方差匹配）；
+      和分布 $B_1{+}S_x \to$ 方差匹配的 \texttt{DiscreteGaussian}
+\item \textbf{攻击面}：RLWE 跑 \texttt{primal\_usvp} / \texttt{dual} /
+      \texttt{dual\_hybrid}；NTRU 跑 \texttt{NTRUParameters} 的
+      \texttt{primal\_bdd} 与「NTRU $=$ LWE$(b{=}0)$ + $m$ 优化」两种建模
+\item \textbf{环境}：远端 16 核（Sage 10.9），与本地 WSL 双环境一致
+\end{itemize}
+
+勘误后的关键代码（完整脚本 \texttt{code/remote\_battery\_v2.py}，
+诊断轮 v3--v7 存 \texttt{tmp/}）：
+\begin{verbatim}
+# NEV-R2: n=1024, q=1409, f=g=r=e ~ B2  (doc Table 2)
+Xs = CenteredBinomial(2); Xe = CenteredBinomial(2)
+ntru = NTRUParameters(n=1024, q=1409, Xs=Xs, Xe=Xe,
+                      ntru_type="circulant")
+res = primal_bdd(ntru, red_cost_model=ADPS16())
+# beta=974 -> C = 0.292*974 = 284.4   (claim: 284, Table 6 beta=975)
+
+# DTRU-768: secret sigma (doc Table 1: kr=4)
+s = sqrt(4/2)   # = sqrt(2), NOT sqrt(1/2)
+m, beta, C = MLWE_optimize_attack(3457, 768, 768, s,
+    cost_attack=LWE_primal_cost, cost_svp=svp_classical)
+# beta=684 -> C=200.1  (claim: 198)
+\end{verbatim}
+
+\subsection{勘误后复现结果}
+
+\subsubsection{精确命中（公共工具 + 文档参数 $\Rightarrow$ 声称值）}
+
+\begin{table}[htbp]\centering\small
+\begin{tabular}{@{}llrrrl@{}}
+\toprule
+Scheme & 声称来源 & $\beta$(doc) & $\beta$(repro) & C & Gap \\
+\midrule
+Kyber-512 & (校准) & -- & 406 & 118.6 & +1.6 \\
+\midrule
+Flit-128 RLWE & Table 4 & 407 & 407 & 118.8 & 0.0 \\
+Flit-128 NTRU & Table 4 & 406 & 407 & 118.8 & +0.3 \\
+Flit-256 RLWE & Table 4 & 915 & 915 & 267.2 & 0.0 \\
+Flit-256 NTRU & Table 4 & 915 & 915 & 267.2 & 0.0 \\
+\midrule
+ZEN-128 NTRU & Table 1 & $\approx$440 & 437 & 127.6 & $-$0.9 \\
+ZEN-256 NTRU & Table 1 & $\approx$879 & 880 & 257.0 & $-$0.5 \\
+\midrule
+NEV-R1 NTRU & Table 6 & 464 & 464 & 135.5 & +0.5 \\
+NEV-R1 RLWE & Table 6 & 464 & 465 & 135.8 & +0.8 \\
+NEV-R2 NTRU & Table 6 & 975 & 974 & 284.4 & +0.4 \\
+NEV-R2 RLWE & Table 6 & 975 & 976 & 285.0 & +1.0 \\
+\midrule
+DTRU-768 & Table 1 & -- & 684 & 200.1 & +2.1 \\
+DTRU-1024 & Table 1 & -- & 920 & 269.1 & $-$1.9 \\
+DTRU-1536 & Table 1 & -- & 1394 & 407.7 & $-$3.3 \\
+DTRU-2048 & Table 1 & -- & 1931 & 564.8 & $-$2.2 \\
+\bottomrule
+\end{tabular}
+\caption{默认配置下由优化器直接复现的 10 套参数（Gap $=$ repro
+$-$ claim，C 为 CoreSVP 经典 bits）。FLIT-128/256 的 $(d,\beta)$
+与 NEV-R1 的 $\beta$ 精确一致；NEV-R2 差 $\pm 1\beta$
+（文档 975，复现 974/976），此前「逐位一致」的表述不准确。
+FLIT 按参考实现的每符号约定（方差 $2T$）建模；其 spec 散文的
+占比读法与实现矛盾（见 \texttt{params.h} 与 Algorithm 2）。
+另 3 套（Flit-512、NEV-R3、ZEN-512 NTRU）需显式提升搜索上限
+后由优化器复现（见下文），合计 13/14 一致。}
+\end{table}
+
+\subsubsection{残差（公共工具 + 文档参数 $\neq$ 声称值）}
+
+\begin{table}[htbp]\centering\small
+\begin{tabular}{@{}llllc@{}}
+\toprule
+Scheme & Claim & 复现（配置） & Gap & 归因层 \\
+\midrule
+DTRU-648 & 164 & 148.3（primal） & $-$15.7 & 未归因残差 \\
+ZEN-512 RLWE & 519.9 & 515.82（完整 \texttt{rop}） & $-$4.1 & 小残差（未归因） \\
+\midrule
+Flit-512 & 550.4 & 550.42（上限 2200，$\beta{=}1885$） & $+0.02$ & 搜索域上限（一致） \\
+NEV-R3 NTRU & 583 & 583.71（上限 2200，$\beta{=}1999$） & $+0.7$ & 搜索域上限（一致） \\
+ZEN-512 NTRU & 526.2 & 526.18（上限 2200，$\beta{=}1802$） & $-0.02$ & 搜索域上限（一致） \\
+\midrule
+ZEN-128/256 RLWE & 129.4/261.9 & 143.7/275.4（完整 \texttt{rop}） & +14.3/+13.5 & 方案保守 \\
+\bottomrule
+\end{tabular}
+\caption{残差与改判清单（完整成本口径）。\textbf{口径修正}：
+dual\_hybrid 的完整成本是含猜测/FFT/重复项的
+$\log_2$\texttt{rop}，不是 $0.292\beta$——ZEN-512 RLWE 的
+差异由先前误算的 $-21.5$ 修正为 $-4.1$，保守行由
+$+9/+16.7$ 修正为 $+14.3/+13.5$。三处「不可行」系
+\texttt{max\_beta}$=1754$ 搜索域上限所致（上文），提限后
+与声称一致。唯一实质残差 DTRU-648（$-15.7$；
+$\sigma^2{=}2$ 得 163.8$\approx$164，$\beta{=}560$，反解
+不唯一，不作因果结论）。}
+\end{table}
+
+\paragraph{搜索域上限：rop $= \infty$ 的真实成因。}
+estimator 的 \texttt{conf.py} 在三个使用版本中均设
+\texttt{max\_beta}$=1754$（源码注释：Upper bound on
+blocksize, for security levels of at most 512 bits），优化器
+的 $\beta$ 搜索范围由它限定。Flit-512（$\beta{=}1885$）、
+ZEN-512 NTRU（1802）、NEV-R3（1999）的最优块大小均超出默认
+域，故返回 $\infty$。\textbf{在进程内将
+\texttt{max\_beta\_global} 提至 2200（不改源码）}后，优化器
+直接输出：Flit-512 得 $\beta{=}1885$、
+$\log_2\texttt{rop}{=}550.420$（声称 550.4）；ZEN-512 NTRU 得
+1802、526.184（声称 526.2）；NEV-R3 得 1999、583.708（声称
+583，$+0.7$ 为 $\beta$ 取整）；各组在 \texttt{53da598} 与
+\texttt{3e48ef4} 上一致。诊断上，先把声称点 $(m,\beta)$ 代入
+闭式条件 \texttt{PrimalUSVP.cost\_gsa} 求值同样有效（我们以
+此先定位问题），但该步骤只验证「存在满足启发式条件的攻击
+点」，不能升级为全局最优性或方案安全性证明。教训：
+\texttt{rop}$=\infty$ 的语义是「搜索域未覆盖」，不是「实例
+不可解」或「声称错误」；复现流程应显式记录搜索上限。
+
+\paragraph{撤回：「fatigue 饱和」的先前解释不成立。}
+此前我们把 NTRU 模块对 $n{=}2048$ 多个 $q$ 恒返回
+$\beta{=}1755$ 解释为 overstretched fatigue 界——经核查
+\textbf{不成立}：按工具自身判据
+$\texttt{ntru\_fatigue\_lb}(2048){=}416{,}463 \gg q$，这些实例
+并非 overstretched；恒定 $\beta{=}1755$ 恰为
+\texttt{max\_beta}$+1$，来自上限截断而非 fatigue 机制。
+相关「$\ge 512$ 下界」表述一并撤回；搜索截断值不构成任何
+安全下界。
+
+\subsection{差距原因：三层结论}
+
+\begin{enumerate}
+\item \textbf{初版 $-18 \sim -44$ bits 差距的主因是复现侧参数错误}
+      （占差距的绝大部分）。按文档参数 + 参考实现勘误后，
+      13/14 套推荐参数一致：10 套由默认配置优化器复现
+      （FLIT-128/256 与 NEV-R1 精确一致，NEV-R2 差 $\pm 1\beta$），
+      3 套（Flit-512、NEV-R3、ZEN-512 NTRU）需显式提升
+      搜索上限（见第 3 条）。\textbf{初版归因于
+      「NTRU$\to$LWE 建模差异」的假设被证伪}——勘误后的
+      LWE 建模与 NTRU 模块都能精确复现多数声称值。
+\item \textbf{声称值的度量不统一（异质口径）}：FLIT 头条值是
+      MATZOV 门数取全攻击最小（Table 3），另附 CoreSVP（Table 4）；
+      ZEN 头条值是 CoreSVP 取最小（其最优攻击为 dual\_hybrid）；
+      NEV 是 CoreSVP NTRU-primal；DTRU 是脚本经典值。
+      不同口径直接对比会产生 10--15 bits 的伪差距
+      （CoreSVP vs MATZOV 典型差 5--15 bits）。
+      这也印证了本报告不做跨方案横向对比的决定。
+\item \textbf{真实的残差}（完整成本口径）：唯一实质残差
+      DTRU-648（$-15.7$；在明确列出的脚本/输入下未解释，
+      $\sigma^2{=}2$ 可得 163.8$\approx$164 但反解不唯一，
+      不作因果结论）；ZEN-512 RLWE 面为 $-4.1$ bits 的
+      小残差（先前 $-21.5$ 系用 $0.292\beta$ 而非完整
+      \texttt{rop} 的口径错误，已修正）。另有一处
+      \textbf{方案保守}（ZEN-128/256 RLWE 声称低于完整成本
+      复现值 $+14.3/+13.5$，方向相反）。
+\item \textbf{附带两项方法论发现}：(a) FLIT 的 spec 散文与其
+      Algorithm 2 / \texttt{params.h} / 安全表矛盾（散文写
+      「nonzero 占比」，实现为每符号 $\sigma$，实际占比是散文
+      值的 $2\times$）——按散文口径复现会低估其安全性
+      13--26 bits，文档歧义本身即风险；
+      (b) estimator 的 \texttt{max\_beta}$=1754$ 搜索域
+      上限（注释明示对应 512-bit 等级）使超出该等级的声称
+      默认返回 \texttt{rop}$=\infty$，失败语义未文档化——
+      我们先前对恒定 $\beta{=}1755$ 的「fatigue 饱和」解释
+      不成立（实例并非 overstretched），已撤回。
+\end{enumerate}
+
+\begin{warnbox}[诚实声明]
+\begin{enumerate}
+\item 初版报告的「复现与声称差 20--40 bits，主因 NTRU$\to$LWE
+      建模」结论\textbf{已被本版推翻}：主因是复现侧参数错误。
+      修正后 13/14 套推荐参数与公共工具一致（5 套精确），
+      方案文档的估算总体可信。
+\item 本版自身也修正了前一版的两处错误归因：
+      「优化器漏搜边界薄片」实为 \texttt{max\_beta}$=1754$
+      搜索域上限（文档化设计选择，非优化器缺陷）；
+      「fatigue 饱和」解释不成立（实例并非 overstretched，
+      恒定 $\beta{=}1755$ 来自上限截断）。两处均已撤回。
+      口径上，dual\_hybrid 必须用完整 \texttt{rop} 而非
+      $0.292\beta$ 比较——ZEN-512 RLWE 的差距据此从 $-21.5$
+      修正为 $-4.1$。
+\item 残差不等于可利用攻击：DTRU-648 的工具值 148 $>$ 其
+      128-bit 目标；ZEN-512 RLWE 的 $-4.1$ 在代理分布与
+      配置条件内。残差的合规意义是「声称值与所引工具在
+      文档参数上的输出不一致」，而非「方案不安全」。
+\item FLIT 的 spec 散文（「nonzero 系数占比」）与其 Algorithm 2、
+      参考实现 \texttt{params.h} 及安全表互相矛盾：实现与安全表
+      一致（每符号 $\sigma$，方差 $2T$），散文是错的。
+      按\textbf{实现}口径，Flit-128/256 精确复现；
+      按散文口径则分别低 13/26 bits——文档歧义本身即风险。
+\item 搜索截断与模型预测不是安全下界：任何
+      \texttt{rop}$=\infty$ 或截断值（如 $\beta{=}1755$）
+      均不构成「所有攻击需至少如此成本」的证据。
+\end{enumerate}
+\end{warnbox}
+
+\section{结论}
+
+\subsection{安全性证明}
+
+\begin{enumerate}
+\item \textbf{拒绝采样的证明处理是分水岭}：
+      Aigis（entropic RS，正确）、BiT（忽略条件信息，被我们攻破）、
+      COMPASS（未刻画效应，意外增强安全性）。
+\item \textbf{CCA/SUF 损失不紧}：所有方案 $\sim 2q$ 乘性损失。
+\item \textbf{新假设缺乏统一评估}。
+\end{enumerate}
+
+\subsection{安全强度估算}
+
+\begin{enumerate}
+\item \textbf{声称值总体可复现}：按设计文档精确参数 + 参考实现
+      约定 + 显式搜索上限复现，14 套推荐参数中 13 套一致
+      （容差 $\le 4$ bits，5 套 $\beta$/$\log_2$\texttt{rop}
+      精确一致）。初版「差 20--40 bits」系复现侧参数错误，
+      二版的两处归因错误（漏搜薄片、fatigue）本版一并勘误。
+\item \textbf{唯一实质残差 DTRU-648}（$-15.7$，未归因；
+      $\sigma^2{=}2$ 反解非唯一，不作因果判断）；ZEN-512 RLWE
+      面 $-4.1$（完整成本口径的小残差）。ZEN-128/256 RLWE
+      方案保守（声称低于完整成本复现值 $+14.3/+13.5$）。
+      Flit-512、NEV-R3、ZEN-512 NTRU 在显式搜索上限下与声称
+      一致。
+\item \textbf{文档--实现一致性是新的审计维度}：FLIT 的 spec
+      散文与其 Algorithm 2、\texttt{params.h}、安全表在分布
+      约定上矛盾；按散文口径复现会低估其安全性 13--26 bits。
+\item \textbf{声称口径异质}：FLIT 用 MATZOV 最小值、ZEN 用
+      CoreSVP 最小值、NEV 用 CoreSVP NTRU-primal、DTRU 用脚本
+      经典值——直接对比会产生 10--15 bits 伪差距，
+      必须先对齐口径。
+\item \textbf{无随包估算代码}：所有方案的安全估算代码均
+      不随包提供，本报告的复现需逐卷人工提取参数表、核对
+      参考实现、构造分布代理——这本身就是最大的可复现性障碍。
+\end{enumerate}
+
+\subsection{建议}
+
+\begin{enumerate}
+\item FSwA 方案应显式分析拒绝条件对 $(c,z)$ 联合分布的影响
+      （Aigis 的 Lemma 4 是标准做法）
+\item 要求随包估算脚本（含参数表、工具版本、commit 号、
+      分布到工具输入的映射），使独立验证无需人工猜参数
+\item 要求安全分析所用的分布约定与规范文本、参考实现
+      \textbf{三方一致}（FLIT 的散文/实现矛盾应作为案例通报）
+\item 要求同时报告 CoreSVP 和 MATZOV 两种模型的结果，
+      并注明头条值采用哪种口径
+\item 对 DTRU-648（反解输入 $\sigma^2{=}2$ 与文档 $B_2$ 不符）
+      与 ZEN-512 RLWE（$-21.5$，未归因）两处真实差距，
+      建议向提交方索取估算输入：前者应重算为 $\approx$148
+      或更正参数表，后者需公布 dual\_hybrid 配置
+\item 评审复现流程应加入\textbf{逐点核验}步骤：对声称的
+      $(m,\beta)$ 直接以 \texttt{cost\_gsa} 求值，
+      区分「搜索失败」（工具覆盖缺陷）与「声称错误」
+\end{enumerate}
+
+\end{document}

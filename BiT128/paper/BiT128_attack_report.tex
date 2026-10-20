@@ -1,0 +1,303 @@
+% !TEX program = xelatex
+% 编译：xelatex BiT128_attack_report.tex （需编译两遍以生成交叉引用）
+\documentclass[11pt,a4paper]{ctexart}
+
+\usepackage[margin=2.4cm]{geometry}
+\usepackage{amsmath,amssymb,amsthm}
+\usepackage{booktabs}
+\usepackage{array}
+\usepackage{algorithm}
+\usepackage{algpseudocode}
+\usepackage{xcolor}
+\usepackage[colorlinks=true,linkcolor=blue!60!black,urlcolor=blue!60!black]{hyperref}
+\usepackage{fancyhdr}
+
+\pagestyle{fancy}
+\fancyhf{}
+\fancyhead[L]{\small BiT-128 公开数据统计攻击}
+\fancyhead[R]{\small\thepage}
+
+\newtheorem{claim}{断言}
+
+\newcommand{\Zq}{\mathbb{Z}_q}
+\newcommand{\Z}{\mathbb{Z}}
+\newcommand{\modq}{\pmod q}
+
+\title{\bfseries BiT-128 签名方案的公开数据统计攻击：\\
+hint 通道、场定律与等价私钥恢复\\[0.4em]
+\large ——完整攻击路线、数学推导与实验验证（v3，含 2026-09-28 更正与外部审阅修订）}
+\author{GLM-5.3 Flash max \and Jy L\\[0.3em]\small NGCC 提交算法审计小组（所有者授权审计；分析对象为提交方自有的 BiT-128 参考实现）}
+\date{2026 年 9 月}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+BiT（Bimodal Triangular distribution based lattice signatures）是 NGCC 首批签名算法候选之一。本报告在所有者授权下，对 BiT-128 参考实现完成了一次\textbf{完全基于公开数据}的密钥恢复攻击，并通过未修改的原始 C 签名器与验证器完成了伪造闭环。攻击由三条线索组成：(1) 窄掩码 $z_0$ 的支撑错位使每次签名以 $96.2\%$ 的准确率泄露共享双峰符号位 $\varepsilon$；(2) \textbf{hint 通道}——本报告的核心新发现——公开的 hint 多项式 $h$ 是等价私钥全部未知量 $R = b_0 - e$ 的直接一阶含噪观测，其数学根源是签名侧 hint 论证式中掩码 $y_2$ 的精确抵消；(3) 累加统计量中的确定性结构可表示为 $R$ 的\textbf{线性泛函}并\textbf{作为已知算子求逆消除}：对齐组合学部分由位置互斥 Monte-Carlo 算子精确刻画；接受条件化带来的剩余项未建模，其量级由实证界定（残差 $\sigma\approx0.10$ @ $4\times10^6$）。在 $N = 4\times 10^6$ 条同密钥公开签名下，逐行标度算子求逆给出 $R$ 的\textbf{零错误}分类，模 $q$ 线性求解给出 $s_0$ 的 768/768 逐系数精确恢复，等价私钥 $(\hat e,\hat b_0)$ 经原始 C 签名器产生 20/20 条伪造签名、全部通过原始验证器（4 组阴性对照全部拒绝）。第二条独立恢复路线（$z_1$ 加权回归）在同一数据上得到验证并恢复出\textbf{逐字节相同}的等价私钥。全部结论经七项独立检查。
+\end{abstract}
+
+\tableofcontents
+\newpage
+
+\section{引言}
+
+\subsection{背景}
+
+BiT 是 NGCC 首批公钥签名算法候选之一，设计源自 BLISS 一系的双峰 Fiat--Shamir 构造：每次签名掷入一个共享双峰比特 $b$，将规范化挑战乘以 $\varepsilon = (-1)^b$ 后再计算响应，使响应的\textbf{边缘}分布与 $b$ 无关。规范第 3.1.3 节声称"响应 $z$ 与 $b$ 独立"。本报告证明该独立性在\textbf{联合分布}层面失效，且失效方式足以在纯公开数据下完成完全密钥恢复。本审计于 2026-09-20 启动：第一阶段完成并留有带日期记录的结论包括 $z_0$ 标签通道（96.2\%）、等价私钥代数（$R = b_0 - e$ 与窗口补全）与 oracle 密钥的参考验证器伪造闭环。
+
+文献脉络：Ducas 等（ePrint 2013/383）建立双峰 Fiat--Shamir 框架；Espitau 等（ePrint 2017/505，CCS 2017）对 BLISS 双峰拒绝采样实施缓存侧信道攻击（需运行时泄露）；Béguinot 等（TCHES 2022）发展侧信道 EM。本报告的攻击不需要任何运行时泄露。
+
+\subsection{贡献}
+
+\begin{enumerate}
+\item \textbf{hint 通道的发现与推导}（第 \ref{sec:hint} 节）：公开 hint 满足 $h[j] \approx -\bigl(y_2[j] - (R * c_{\mathrm{signed}})[j]\bigr)/\gamma_2$ 的 7 级量化，其中 $R = b_0 - e$ 恰为等价私钥的全部未知量。关键是签名侧 hint 论证式中 $y_2$ 的精确抵消。
+\item \textbf{确定性结构的算子定律}（第 \ref{sec:field} 节）：$\varepsilon$ 对齐统计量中的确定性结构是 $R$ 的线性泛函；对齐组合学部分由位置互斥 Monte-Carlo 算子\textbf{精确刻画}（在挑战位置不重复的抽样模型下即为精确期望），接受条件化项未建模、由实证界定。
+\item \textbf{估计器与闭合}（第 \ref{sec:estimator}--\ref{sec:results} 节）：算子求逆 + 逐行标度拟合 + 全解一致性修正器；$N=4\times10^6$ 时 $R$ 零错误、$s_0$ 768/768 精确、伪造 20/20 通过原始验证器。
+\item \textbf{交叉验证组}（第 \ref{sec:crossval} 节）：七项独立检查全部通过，含第二条独立恢复路线的交叉验证（同一等价私钥）。
+\item \textbf{否定结果与更正}（第 \ref{sec:negative} 节）：早期 $\psi$ 统计量+阈值判决不收敛（实现教训，已更正）；对称混合 EM 不可辨识；e-场假设被否定。
+\end{enumerate}
+
+\section{预备知识}\label{sec:prelim}
+
+\subsection{参数与记号}
+
+$R_q = \Z_q[x]/(x^d+1)$，$d=256$，$q=26881=39\cdot682+283$；$\tau=30$；$\gamma_{1,0}=8$，$\gamma_1=1024$，$\gamma_{1,2}=2048$；$\gamma_2=682$；$\gamma_b=16$；$K=L=3$；$H_\infty=3$；签名 1504 字节。
+
+秘密与公钥：$s_0 \xleftarrow{\$} \{-1,0,1\}^{L\times d}$，$e$ 同型，$b = A_0 s_0 + e = 16 b_1 + b_0$（$b_1$ 公开、$b_0\in[-8,8)^d$ 保密）。公钥 $(A_0, b_1)$。
+
+\subsection{签名流程}
+
+每次迭代：(a) $w = A_0 y_1 - 16 b_1 y_0 + \hat q y_0$（行 0）$+ y_2$；(b) $w_1 = \mathrm{highbits}(w)$；(c) $\tilde c = H(\mu\|w_1)$，$c_{\mathrm{can}} = \mathrm{SampleInBall}(\tilde c)$；(d) 掷 $b$，$c_{\mathrm{signed}} = \varepsilon c_{\mathrm{can}}$；(e) $z_0 = y_0 + c_{\mathrm{signed}}$，$z_{1,i} = y_{1,i} + s_{0,i}*c_{\mathrm{signed}}$，逐坐标拒绝，失败仅重抽 $y_0,y_1$；(f) $z_{2,i} = y_{2,i} + e_i*c_{\mathrm{signed}}$，拒绝则全重抽；(g) hint 计算（\S\ref{sec:hint-sem}）与 $|h|_\infty\le3$ 检查；(h) 输出 $(\tilde c, z_0, z_1, h)$。
+
+\subsection{验证流程}
+
+验证方重算 $w' = A_0 z_1 - 16 b_1 z_0 + \hat q(z_0 + c_{\mathrm{can}})$（行 0），以 $w''[j] = \mathrm{fold}(\mathrm{highbits}(w'[j]) + h[j])$ 重建 $w_1$，校验 $H(\mu\|w'') = \tilde c$。
+
+\subsection{代数关系：$R$ 因子与等价私钥}\label{sec:algebra}
+
+\begin{equation}
+R := \mathrm{center}(A_0 s_0 - 16 b_1) = b_0 - e \in [-9,8]^{K\times d}.
+\label{eq:Rdef}
+\end{equation}
+$R$ 公钥可计算。等价私钥：$\hat e_m = -\mathbf{1}[R_m\ge8] + \mathbf{1}[R_m\le-9]$，$\hat b_0 = R + \hat e$，则 $A_0 s_0 + \hat e \equiv 16 b_1 + \hat b_0 \modq$。两点精确化：（i）$A_0$ 模 $q$ 的可逆性已数值验证（$A_0^{-1}A_0 \equiv I \pmod q$ 逐元素成立），并非由方程计数推断；（ii）等价钥与原钥是\textbf{验证等价}而非输出同分布——$z_2$ 拒绝依赖 $e$，替换 $\hat e$ 后接受概率与输出的联合分布均不同（逐坐标边缘仍为同一公开目标分布）。\textbf{恢复 $s_0$ 与 $R$ 之一即得另一个}（$A_0$ 模素数 $q$ 可逆，768 方程对 768 未知数）。
+
+\section{通道一：$z_0$ 与双峰符号位}\label{sec:z0}
+
+支撑位置上 $z_0 = y_0 \pm 1$，硬拒绝 $|z_0|\ge8$ 造成两侧截断不对称。对数似然比
+\begin{equation}
+\Lambda = \sum_{j\in\mathrm{supp}} \mathrm{clip}\!\left(\ln\frac{f_0(z_0[j]-1)}{f_0(z_0[j]+1)},\ \pm40\right),
+\quad f_0(x) = \frac{8-|x|}{64}\mathbf{1}[|x|\le7]
+\label{eq:Lambda}
+\end{equation}
+给出 $\hat\varepsilon = \mathrm{sign}(\Lambda)$：实测 $96.19\%$（四个数据集 $96.18$--$96.21\%$；$\mathbb{E}[w^2] = 0.88935$，与理论 $0.8894$ 吻合）。该通道为一切后续统计提供签名级标签。
+
+$z_1$ 通道对照：$z_{1,i} = y_{1,i} + s_{0,i}*c_{\mathrm{signed}}$ 携带 $s_0$ 的一阶信息。我们早期以 $\psi(z)=\mathrm{sign}(z)/(1024-|z|)$ 统计量加符号阈值判决估计时观察到不收敛（跨数据集零位置相关 $0.9907$ 的确定性结构、ICM 发散）。【2026-09-28 更正】不收敛是\textbf{该统计量与判决规则的缺陷}，而非通道本身——原始 $z$ 的后验加权回归在同样数据上按 RMSE $\propto N^{-1/2}$ 收敛（已在独立数据集上验证，并经公钥窗口修正闭合）。我们最终选择 hint 通道（第 \ref{sec:hint} 节）：直接观测 $R$、确定性结构可精确求逆，构成独立于 $z_1$ 回归的第二条路线。
+
+\section{通道二：hint 通道}\label{sec:hint}
+
+\subsection{hint 的精确语义}\label{sec:hint-sem}
+
+$\mathrm{cell}(x) = \lfloor((x \bmod q)+\gamma_2/2)/\gamma_2\rfloor \in [0,39]$；
+$h[j] = \mathrm{fold}_{40}(\mathrm{cell}(w[j]) - \mathrm{cell}(w_a[j])) \in [-3,3]$，
+发布条件 $|h|_\infty \le 3$。由定义，cell 0 覆盖 $[0,340]$（341 个值），cell 1--38 各覆盖 682 个值，cell 39 覆盖 $[26257, 26880]$（624 个值）；合计 $341+38\cdot682+624=26881$。签名侧论证式
+$w_a[j] = w[j] - z_{2,i}[j] + (b_{0,i}*c_{\mathrm{signed}})[j] + \mathbf{1}[i=0]\mathbf{1}[b=0]c_{\mathrm{signed}}[j]$。
+
+\subsection{$y_2$ 的精确抵消}
+
+先注意：在 $w_a = w - z_2 + b_0*c_{\mathrm{signed}}$ 的内部，$w$ 项与 $z_2$ 项中的 $y_2$ 相互抵消——$w_a = \mathrm{base} - (R_i*c_{\mathrm{signed}}) + \cdots$ \textbf{与新鲜掩码无关}（这是设计自身的 hint 一致性要求）。再代入 $z_{2,i} = y_{2,i} + e_i*c_{\mathrm{signed}}$ 与 $w = \mathrm{base} + y_2$：
+\begin{equation}
+w[j] - w_a[j] = y_2[j] - (R_i*c_{\mathrm{signed}})[j] - \mathbf{1}[i=0]\mathbf{1}[b=0]c_{\mathrm{signed}}[j].
+\label{eq:cancel}
+\end{equation}
+于是差值中 $y_2$ 以\textbf{唯一未知噪声}的身份出现（密度已知：三角分布），而 $R$ 以信号身份出现。base 的格内偏移近似均匀，故
+\begin{claim}
+$\mathbb{E}[h[j]\mid \Delta[j]] = -\kappa\,\Delta[j]/\gamma_2 + O(|\Delta[j]|/q)$，
+$\Delta[j] = y_2[j] - a[j]$，$a[j] = (R_i*c_{\mathrm{signed}})[j] + $ 行 0 项。
+MC 测量斜率 $-1.4826\times10^{-3}$ vs 理论 $-1/682$（$\kappa=1.0112$，环绕不对称）。
+\end{claim}
+即公开 $h$ 是 $R$ 的直接一阶含噪观测，噪声 $y_2$ 为已知密度的新鲜随机数。
+
+\subsection{对齐累加统计量}
+
+\begin{equation}
+\Phi_R[i][m] = \sum_{n,t} \hat\varepsilon_n\,\mathrm{flip}(m,n,t)\,h_n[(m+p_{n,t}) \bmod d],
+\qquad M = N\tau,
+\end{equation}
+期望（第 \ref{sec:field} 节推导）：
+$\mathbb{E}[\Phi_R[i][m]] = -\frac{1}{\gamma_2}\bigl[\kappa s M R_i[m] + \beta(KR_i)[m]\bigr] - \frac{sP_0M}{\gamma_2}(1-\tfrac{2m}{d})\mathbf{1}[i=0] + $ 二阶项。
+
+\section{确定性结构的算子定律}\label{sec:field}
+
+\subsection{$\varepsilon$-自由卷积的位置期望}
+
+$\varepsilon$-对齐消去 $\varepsilon$ 后，$\varepsilon$-自由卷积 $a_0[j] = \sum_t(\pm)R[(j-p_t)]$ 的期望不消失：
+$\mathbb{E}[a_0[j]] = \frac{\tau}{d}\bigl(2\,\mathrm{CumR}[j] - \Sigma R\bigr)$——随机游走。实测逐位置场（$2\times10^5$ 签名）与预测相关 $0.989/0.989/0.933$，回归斜率 $1.015/0.998/0.989$，标准差匹配。
+
+\subsection{$\Phi$ 层面的 tent 算子}
+
+\begin{equation}
+\mathbb{E}[\Phi_R[i][m]] = -\frac{1}{\gamma_2}\Bigl[M R_i[m] + \beta\sum_v K[m,v]R_i[v]\Bigr] - \frac{sP_0M}{\gamma_2}\Bigl(1-\frac{2m}{d}\Bigr)\mathbf{1}[i=0],
+\qquad K[m,v] = d - 2|m-v|,\quad \beta = \frac{N\tau(\tau-1)}{d^2}.
+\end{equation}
+场预测与实测残差相关 $0.967$--$0.997$。需要强调精度边界。场算子若按\textbf{独立、有放回}的位置近似推导（tent 核），则对角项不正确：$C(c)^{\mathsf T}C(c)$ 的对角元对每个挑战恰为 $\tau$（每列恰 $\tau$ 个 $\pm1$），故理想线性模型下信号算子对角应为 $N\tau$，而 tent 算子对角为 $N\tau(1+\frac{\tau-1}{d})$，超出 $11.3\%$。整个 tent 近似相对位置互斥 Monte-Carlo 算子的 Frobenius 相对误差实测为 $10.9\%$——相关系数 $0.9911$ 不能解读为 $0.9\%$ 误差。求逆采用 MC 算子：在\textbf{位置互斥均匀}的挑战模型下，它是对齐组合学部分的精确期望；\textbf{接受条件化（$z_2$ 拒绝、hint 范围截断、$w_1$ 稀疏检查）不在其中}，作为未建模项由实证界定（见 \S\ref{sec:negative} 与 $\sigma$ 的讨论）。
+
+\section{估计器设计}\label{sec:estimator}
+
+\subsection{算子求逆与逐行标度}
+
+模型（所有确定性项统一携带标签因子 $s$）：
+\begin{equation}
+-\gamma_2\,\mathbb{E}[\Phi_R[i]] \;=\; s\Bigl[M R_i + N F_{\mathrm{op}} R_i + P_0 M\Bigl(1-\tfrac{2m}{d}\Bigr)\mathbf{1}[i=0]\Bigr],
+\label{eq:solve-model}
+\end{equation}
+故估计方程为
+\begin{equation}
+\Bigl(M\mathbb{I} + N F_{\mathrm{op}}\Bigr)\hat R_i \;=\; -\frac{\gamma_2}{s}\,\Phi_R[i] \; -\; P_0 M\Bigl(1-\tfrac{2m}{d}\Bigr)\mathbf{1}[i=0].
+\label{eq:solve}
+\end{equation}
+（早期版本把行 0 项在估计方程中写成 $+B$、在期望式中写成 $-B$，符号相反——系排版错误；实现代码为 $-B$，已与本式逐项核对。另，早期版本仅将 $s$ 标于对角项的写法已更正为统一标度。）方程两端对 $s$ 尺度等变，$s$ 的逐行取值由聚类拟合标定（同时吸收 $\kappa$ 的行间起伏）。$s$（标签尺度）不可由 $\Lambda$ 分布的对称混合 EM 估计（不可辨识），改用整数聚类目标 $\mathrm{obj}_i(s) = \frac1d\sum_m\cos(2\pi\hat R_i[m](s))$ 逐行拟合（真值处 $\approx0.8$，偏离塌缩）。
+
+\subsection{全解一致性修正器（nbad razor）}
+
+$s_0 = A_0^{-1}(16b_1+R)$ 对 $R$ 的任何错误全局敏感：定义 $\mathrm{nbad} = \#\{j: s_0[j]\notin\{-1,0,1\}\}$，真值处 $0$、错误修正下 $\approx768$。修正器枚举候选，\textbf{仅当使 $\mathrm{nbad}=0$ 才应用}；阶段化 $k=1\to2\to3$。实现教训：贪心接受"nbad 减一"的修正会破坏全局；取整裕度窗口会漏掉真正跨界坐标——$k=1$ 阶段应全坐标全 $\delta$ 扫描。
+
+\begin{algorithm}[htbp]
+\caption{BiT-128 公开数据等价私钥恢复（hint 通道路线）}
+\begin{algorithmic}[1]
+\Require 同密钥公开签名、公钥 $(A_0,b_1)$
+\State 标签：$\hat\varepsilon_n = \mathrm{sign}(\Lambda_n)$
+\State 累加 $\Phi_R[i][m]$
+\State 构造 $F_{\mathrm{op}}$（位置互斥 Monte-Carlo）
+\For{每行 $i$}
+  \State 聚类拟合 $s_i$；解算子方程；round+clip 得 $\hat R_i$
+\EndFor
+\State 阶段化 nbad-razor 收尾
+\State $s_0 \leftarrow A_0^{-1}(16b_1+R)$；$(\hat e,\hat b_0)$ 由 $R$ 导出
+\end{algorithmic}
+\end{algorithm}
+
+\section{实验结果}\label{sec:results}
+
+\subsection{tier-1 验证（$10^5$ 签名）}
+
+代数回归：oracle $R$ 逐系数 $= b_0-e$（精确）。池化一阶信号 $T = [1.132, 1.157, 0.904]$（置换对照 $|T|\le0.007$）。逐位置场 corr $0.989/0.989/0.933$，斜率 $\approx1$，$\sigma$ 匹配。逐 bin 条件均值与模型最大偏差 $0.12$（接受条件化二阶修正）。
+
+\subsection{$N=10^6$：场暴露与算子求逆}
+
+直接分类失败（残差为 iid 预测的 23--37 倍、自相关 0.88--0.98、corr$(-\Phi,R)=0.61$--$0.77$）。MC 算子求逆后：
+\begin{itemize}
+\item \textbf{oracle 臂}：直接 $99.87\%$（1/768 错：(2,122)，$\hat R=0.555$ vs 真值 0）→ 单修正闭合 → \textbf{$s_0$ 768/768 精确}。
+\item \textbf{attack 臂}：逐行 $s=0.934/0.932/0.938$，直接 $99.09\%$（7 错），$\sigma\approx0.184$ 单峰；e-场假设否定（corr $\approx0$）；7 错为 iid 跨界（预期 $\approx6$）。
+\end{itemize}
+
+\subsection{$N=4\times10^6$：直接零错误闭合}
+
+\begin{table}[htbp]
+\centering
+\caption{$N=4\times10^6$ 合并（real-1M + sim3m-3M）、逐行标度拟合}
+\begin{tabular}{ccccc}
+\toprule
+行 & $s_i$ & 聚类目标 & 直接错误 & 残差 $\sigma$ \\
+\midrule
+0 & 0.935 & 0.8041 & \textbf{0/256} & 0.098 \\
+1 & 0.932 & 0.8063 & \textbf{0/256} & 0.094 \\
+2 & 0.934 & 0.8183 & \textbf{0/256} & 0.100 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+$R$ 零错误（$\sigma\approx0.10$ 时跨界预期 $\approx0.03$ 个，与观测一致），$s_0$ \textbf{768/768 精确}，等价私钥（$\hat e$ 非零 26 坐标）。
+
+\subsection{原始 C 伪造闭环}
+
+\begin{verbatim}
+FORGE SUMMARY: 20/20 forged signatures accepted by ORIGINAL verifier
+CONTROL SUMMARY: all 4 negative controls REJECTED
+\end{verbatim}
+
+\subsection{$N$ 阈值}
+
+闭合判据应表述为期望跨界错误数 $\mathbb{E}[\text{errors}] = 768\cdot 2\bar\Phi(0.5/\sigma(N))\ll1$，而非对 $\sigma$ 的硬阈值（早期版本 $\sigma(N) = \sqrt{0.154^2\frac{10^6}{N}+0.10^2}$ 配 $\sigma<0.10$ 阈值的推导撤回：$0.10$ 地板是 1M 处受 7 个标签离群值污染的拟合，且该公式在任何有限 $N$ 下都与自身阈值矛盾）。实测锚点：oracle 标签、MC 算子下 $\sigma(10^6) = 0.160/0.163/0.179$（逐行，无离群污染），$\mathbb{E}\approx2.2$，观测 1 错；attack 标签 @ $4\times10^6$：$\sigma = 0.094/0.094/0.100$，$\mathbb{E}\approx0.03$，观测 0 错。按 $N^{-1/2}$ 外推，直接零错误的量级为 $N\gtrsim3$--$4\times10^6$，与实测一致。同期公开的回归路线在 $2$--$2.5\times10^5$ 条签名量级报告闭合；与本管线的差距约一个数量级，或源于统计结构的差异或计数口径的不同。
+
+\section{交叉验证}\label{sec:crossval}
+
+\begin{enumerate}
+\item 独立代数路径：FFT $[x,-x]$ 负循环积，$R=b_0-e$ 精确。
+\item X1 密钥同一性：阶段 E oracle $=$ hint oracle $=$ hint attack（三路 SHA-256 一致）。
+\item X2 数据组合复现（重叠子集一致性）：real+sim1m（$N=2\times10^6$）重跑——零错误、同一密钥。注意 sim1m 的前 $10^6$ 条与 sim3m 确定性重合，故本项是主结果在重叠子集上的一致性检查与“$2\times10^6$ 亦闭合”的数据点，\textbf{不是}统计意义上的独立数据复现；跨密钥成功率亦未由本单一密钥实验建立（同类公开工作报告 4 键中 3 键在 $2\times10^5$ 闭合）。
+\item X4 恒等式：$A_0\hat s_0+\hat e-16b_1-\hat b_0\equiv0\modq$（FFT 路径）。
+\item X5 分块无关：累加器 25k/50k 分块逐元素一致。
+\item X6 跨数据集：real-1M 与 sim3m 独立拟合的 $\hat R$ 一致 761/768，corr 0.999。
+\item X3 管线完整性：sim3m 全部 $3\times10^6$ 条签名经原始验证器零失败。
+\item X8 第二条独立恢复路线交叉验证：$z_1$ 加权回归在同一数据上闭合（$2\times10^5$ 条、公钥修正后 0 错），恢复的等价私钥与 hint 通道\textbf{逐字节一致}。
+
+\begin{table}[htbp]
+\centering\small
+\caption{$z_1$ 加权回归路线的验证对照}\label{tab:repro}
+\begin{tabular}{lcc}
+\toprule
+ & 参考值 & 我们的复现 \\
+\midrule
+RMSE @ $2\times10^5$ & 0.186328 & 0.1842 (real) / 0.1859 (sim) \\
+直接错误 @ $2\times10^5$ & 5/768 & 6/768 (real) / 5/768 (sim) \\
+$\mathbb{E}[w^2]$ & 0.8894（理论） & 0.88935 \\
+修正子集数 & 1,596 & 30,670 \\
+闭合后 & 等价私钥 & 同一把等价私钥（逐字节一致） \\
+\bottomrule
+\end{tabular}
+\end{table}
+\end{enumerate}
+
+\section{否定结果与更正}\label{sec:negative}
+
+\begin{enumerate}
+\item \textbf{【撤回】$z_1$ 线性路线饱和}：早期版本称精度饱和于 65--69\% 且任何 $N$ 不收敛。\textbf{撤回}：饱和是 $\psi(z)$ 统计量+符号阈值判决的伪象；原始 $z$ 回归收敛良好（表~\ref{tab:repro}）。保留较窄结论：$\psi$ 统计量+ICM 方案确实不收敛。
+\item \textbf{ICM 发散}：精确局部似然的坐标上升不改善恢复，似然准则与恢复质量背离。
+\item \textbf{自相关陷阱}（限于 $\psi$ 方案）：自产 $\hat s_0$ 错误与标签噪声同源相关。
+\item \textbf{EM 不可辨识}：对称混合只能确定折叠对。
+\item \textbf{贪心陷阱}：只接受 $\mathrm{nbad}=0$ 的修正。
+\item \textbf{裕度窗口盲区}：跨界坐标未必裕度最大。
+\item \textbf{接受条件化未建模（限制声明）}：hint 通道并未\textbf{完全}绕开选择偏差——$z_2$ 拒绝、hint 范围截断与 $w_1$ 稀疏检查都以秘密为条件作用于公开样本，这些项未进入算子模型，也无形式化上界。实证界定：tier-1 的逐位置场\textbf{在接受的真实签名上}测量、仍与无条件模型吻合（corr $0.989$，斜率 $\approx1$）；置换对照为零；求逆后残差 $\sigma(4\times10^6)\approx0.10$ 且直接零错误。标签因子 $s$ 统一作用于全部确定性项（式 \ref{eq:solve-model}），早期仅标于对角项的写法已更正。
+\end{enumerate}
+
+\section{缓解建议}
+
+\begin{enumerate}
+\item 消除共享双峰符号（逐签名/逐坐标独立掷 $\varepsilon$）——同时封堵 $z_0$ 标签与 hint 对齐前提。
+\item 加宽 $z_0$ 掩码（不影响 hint 通道，需配合其他措施）。
+\item 重审 hint 论证式：$w-z_2+b_0*c$ 使掩码抵消、秘密一阶线性进入公开值——按响应-秘密的独立性与可逆性重审，按混合分布模型重做证明。
+\end{enumerate}
+
+\section{可复现性}\label{sec:repro}
+
+环境：Python 3.13.5 / numpy 2.3.3；gcc 16.1.0。种子：numpy 20260925--20260928；C 侧 "atk1"/"atks"/"forg"。独立管线 \texttt{run\_pipeline.py} 仅凭公开工件（\texttt{phi\_hint\_*.npy}、\texttt{Fop\_150000.npy}、\texttt{pub\_A0.bin}、\texttt{pub\_b1.bin}）即可复现密钥：sha256 \texttt{4191a44b4bf1e081175986302b0d30605bb86f827dbe02c80d90ef7f704d5a11}。
+
+\appendix
+
+\section{符号表}
+
+\begin{tabular}{@{}lp{11.5cm}@{}}
+\toprule
+$\varepsilon=(-1)^b$ & 共享双峰符号位 \\
+$c_{\mathrm{can}},c_{\mathrm{signed}}$ & 规范化/符号化挑战 \\
+$y_0,y_1,y_2$ & 掩码（3/10/11-bit 三角） \\
+$z_0,z_1,z_2$ & 响应分量 \\
+$R=b_0-e$ & 等价私钥全部未知量 \\
+$a[j]$ & hint 通道信号项 \\
+$\Phi_R[i][m]$ & 对齐累加统计量 \\
+$K[m,v],\beta$ & tent 核与场系数 \\
+$s,\kappa$ & 标签尺度与量化斜率因子 \\
+$\mathrm{nbad}$ & $\{-1,0,1\}$ 外的 $s_0$ 坐标数 \\
+\bottomrule
+\end{tabular}
+
+\section{伦理与范围声明}
+
+本分析在 BiT 提交方授权下对其自有参考实现进行。攻击输入仅为公开签名与公钥；ground truth 仅事后评分。结果仅适用于本参数集与参考实现。
+
+\begin{thebibliography}{9}
+\bibitem{ducas2013} L. Ducas et al. Lattice Signatures and Bimodal Gaussians. CRYPTO 2013; ePrint 2013/383.
+\bibitem{espitau2017} T. Espitau et al. Side-Channel Attacks on BLISS. CCS 2017; ePrint 2017/505.
+\end{thebibliography}
+
+\end{document}

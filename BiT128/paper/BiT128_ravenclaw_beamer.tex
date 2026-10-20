@@ -1,0 +1,482 @@
+% !TEX program = xelatex
+% 编译：xelatex BiT128_ravenclaw_beamer.tex （编译两遍）
+% 拉文克劳主题：深蓝 #222F5B × 青铜 #B08D57（v2，含 9-28 更正）
+\documentclass[11pt,aspectratio=169]{ctexbeamer}
+\usepackage{amsmath,amssymb}
+\usepackage{booktabs}
+\usepackage{tikz}
+\usetikzlibrary{arrows.meta,positioning}
+\definecolor{ravblue}{RGB}{34,47,91}
+\definecolor{ravbronze}{RGB}{176,141,87}
+\definecolor{ravlight}{RGB}{93,127,176}
+\definecolor{ravgrey}{RGB}{238,240,246}
+\hypersetup{colorlinks=true,linkcolor=ravblue,urlcolor=ravbronze}
+
+\setbeamercolor{structure}{fg=ravblue}
+\setbeamercolor{palette primary}{bg=ravblue,fg=white}
+\setbeamercolor{palette secondary}{bg=ravbronze,fg=ravblue}
+\setbeamercolor{palette tertiary}{bg=ravblue!80!black,fg=white}
+\setbeamercolor{frametitle}{bg=ravblue,fg=white}
+\setbeamercolor{title}{bg=ravblue,fg=white}
+\setbeamercolor{block title}{bg=ravbronze,fg=ravblue!90!black}
+\setbeamercolor{block body}{bg=ravgrey,fg=black}
+\setbeamercolor{block title alerted}{bg=red!70!black,fg=white}
+\setbeamercolor{block body alerted}{bg=red!5,fg=black}
+\setbeamercolor{block title example}{bg=ravlight,fg=white}
+\setbeamercolor{block body example}{bg=ravgrey,fg=black}
+\setbeamercolor{itemize item}{fg=ravbronze}
+\setbeamercolor{itemize subitem}{fg=ravlight}
+\setbeamercolor{enumerate item}{fg=ravbronze}
+\setbeamercolor{footline}{bg=ravblue!90,fg=white}
+
+\setbeamertemplate{frametitle}{%
+  \nointerlineskip
+  \begin{beamercolorbox}[sep=0.35cm,left]{frametitle}
+    \usebeamerfont{frametitle}\insertframetitle\\[-0.35em]
+    {\color{ravbronze}\rule{0.28\textwidth}{1.6pt}}
+  \end{beamercolorbox}%
+}
+\setbeamertemplate{navigation symbols}{}
+\setbeamertemplate{itemize item}{\color{ravbronze}$\ast$}
+\setbeamertemplate{itemize subitem}{\color{ravlight}--}
+\setbeamertemplate{blocks}[rounded][shadow=false]
+
+\setbeamertemplate{footline}{%
+  \leavevmode%
+  \hbox{\begin{beamercolorbox}[wd=.33\paperwidth,ht=2.4ex,dp=1.2ex,center]{footline}
+    \scriptsize 拉文克劳塔密码研讨
+  \end{beamercolorbox}%
+  \begin{beamercolorbox}[wd=.34\paperwidth,ht=2.4ex,dp=1.2ex,center]{footline}
+    \scriptsize BiT-128 公开数据攻击
+  \end{beamercolorbox}%
+  \begin{beamercolorbox}[wd=.33\paperwidth,ht=2.4ex,dp=1.2ex,center]{footline}
+    \scriptsize \insertframenumber\,/\,\inserttotalframenumber
+  \end{beamercolorbox}}%
+}
+
+\newsavebox{\diadembx}
+\savebox{\diadembx}{%
+\begin{tikzpicture}[scale=0.9]
+  \fill[ravbronze] (-1.1,0) .. controls (-0.7,0.85) and (0.7,0.85) .. (1.1,0)
+    -- (0.75,0.12) .. controls (0.45,0.62) and (-0.45,0.62) .. (-0.75,0.12) -- cycle;
+  \fill[ravlight] (0,0.42) circle (0.13);
+  \draw[ravbronze,thick] (-1.1,0) -- (1.1,0);
+  \fill[ravbronze] (0,0.72) .. controls (0.10,0.90) and (0.30,0.92) .. (0.48,1.06);
+\end{tikzpicture}}
+\newcommand{\diadem}{\usebox{\diadembx}}
+
+\newcommand{\motto}{\textit{``过人的聪明才智是人类最宝贵的财富。''}}
+
+\title{\diadem\\[0.5em]
+\textbf{当双峰比特遇上算子求逆}\\[0.3em]
+\large BiT-128 签名的公开数据完全攻破——一条从 $z_0$ 到 hint 的推理之路}
+\author{GLM-5.3 Flash max \and Jy L\\{\small 拉文克劳塔密码研讨（v2，含 9-28 更正）}}
+\date{2026 年 9 月}
+
+\begin{document}
+
+\begin{frame}
+  \titlepage
+  \begin{center}
+    {\color{ravbronze}\small\motto}\\[0.2em]
+    {\scriptsize\color{ravlight}——ravenclaw-common-room 版攻击讲解；全部数字来自已验证实验产物}
+  \end{center}
+\end{frame}
+
+\begin{frame}{今日的星图}
+  \begin{columns}[T]
+    \column{0.52\textwidth}
+    \begin{enumerate}
+      \item 缺陷：会"说话"的掩码
+      \item 通道一：$z_0$ —— 96.2\% 的神谕
+      \item 岔路：$z_1$ 回归成立（已复现），我们另择 hint
+      \item \textbf{转折：hint 通道（$y_2$ 抵消）}
+      \item 场定律：tent 核与算子求逆
+      \item 闭合：$4\times10^6$ 签名 → 零错误
+      \item 伪造闭环 20/20 与交叉验证
+      \item 我们学到的
+    \end{enumerate}
+    \column{0.44\textwidth}
+    \begin{block}{预告：一行魔法}
+      \small 签名侧 hint 论证式 $w - z_2 + b_0*c$ 里，\\
+      掩码 $y_2$ \textbf{精确抵消}，剩下\\[0.2em]
+      \centering $\mathrm{base} + (b_0 - e)*c_{\mathrm{signed}}$\par
+    \end{block}
+    \begin{alertblock}{结论预告}
+      \small 公开的 hint = 等价私钥全部未知量的\\直接一阶观测。4 百万签名 → 密钥。
+    \end{alertblock}
+  \end{columns}
+\end{frame}
+
+\begin{frame}{背景：NGCC、BiT 与双峰的"魔法"}
+  \begin{itemize}
+    \item BiT：NGCC 首批签名候选，BLISS 系双峰 Fiat--Shamir。
+    \item 参数（BiT-128）：$d=256$，$q=26881$，$\tau=30$，$\gamma_2=682$，
+          $K=L=3$，签名 1504 字节。
+    \item 密钥：$A_0 s_0 + e \equiv 16 b_1 + b_0 \pmod q$；
+          公开 $(A_0,b_1)$，保密 $(s_0,e,b_0)$。
+    \item \textbf{双峰技巧}：每次签名掷一个比特 $b$，把挑战乘上
+          $\varepsilon = (-1)^b$——响应的\textbf{边缘}分布与 $b$ 无关。
+    \item 规范 §3.1.3 声称：$z$ 与 $b$ 独立。
+  \end{itemize}
+  \begin{alertblock}{裂缝}
+    \small 独立性在\textbf{联合分布}上失效——这正是本报告的主题：
+    完整的通道、算子定律与闭合。
+  \end{alertblock}
+\end{frame}
+
+\begin{frame}{通道一：$z_0$ —— 会说话的窄掩码}
+  \begin{columns}[T]
+    \column{0.55\textwidth}
+    \begin{itemize}
+      \item $z_0 = y_0 + \varepsilon\,c_{\mathrm{can}}$，
+            $y_0 \in [-7,7]$（$\gamma_{1,0}=8$，窄！）。
+      \item 挑战位置上：$\varepsilon=+1 \Rightarrow z_0\in[-6,8]$；
+            $\varepsilon=-1 \Rightarrow z_0\in[-8,6]$。
+      \item 打包硬拒绝 $|z_0|\ge8$：两侧截断\textbf{不对称}。
+      \item 对数似然比 $\Lambda = \sum \ln\frac{f_0(z-1)}{f_0(z+1)}$：
+            每签名 $\hat\varepsilon$，准确率 \textbf{96.2\%}。
+    \end{itemize}
+    \column{0.41\textwidth}
+    \begin{exampleblock}{数字}
+      \small $10^6$ 真实签名：\\
+      边界事件覆盖 62.3\%，逐事件 100\%，\\
+      全签名 LLR 96.19\%。\\[0.3em]
+      4 个数据集独立复现：96.18--96.21\%。
+    \end{exampleblock}
+  \end{columns}
+  \vspace{0.2em}
+  \begin{block}{但它只给"标签"}
+    \small $\varepsilon$ 只是签名级的一个比特。要拿到\textbf{密钥}，还需要
+    $s_0$ 或 $R$。通往密钥有两条路——下一帧。
+  \end{block}
+\end{frame}
+
+\begin{frame}{岔路：$z_1$ 回归成立，我们另择 hint}
+  \begin{itemize}
+    \item 早期我们用压缩统计量 $\psi(z)=\mathrm{sign}(z)/(1024-|z|)$ 加阈值判决
+          估计 $z_1$，观察到不收敛（同键数据零位置相关 0.9907）。
+    \item \textbf{更正（2026-09-28）}：不收敛是\textbf{我们的统计量}的缺陷——
+          原始 $z$ 的后验加权回归收敛良好；我们已在其公开描述基础上完整复现该路线
+          （RMSE 0.1842@200k，与原文 0.1863 吻合；Gray 修正 30,670 子集后闭合）。
+    \item 两条路线恢复出\textbf{同一把}等价私钥（逐字节一致）——互为独立见证。
+  \end{itemize}
+  \begin{block}{我们仍选择 hint 通道}
+    \small 它给出 $R$ 的\textbf{直接}一阶观测（$y_2$ 精确抵消）、确定性结构可写成
+    精确算子并求逆、闭合规模可解析预测——是一条与 $z_1$ 回归互补的独立路线。
+  \end{block}
+\end{frame}
+
+\begin{frame}{hint 是什么：40 格的量子化}
+  \begin{columns}[T]
+    \column{0.55\textwidth}
+    \begin{itemize}
+      \item $\mathrm{cell}(x) = \lfloor ((x \bmod q)+\gamma_2/2)/\gamma_2\rfloor
+            \in [0,39]$：把环切成 40 格，每格 682 宽。
+      \item $w_1 = \mathrm{cell}(w)$（挑战哈希的输入）。
+      \item $h[j] = \mathrm{fold}_{40}(\mathrm{cell}(w[j]) -
+            \mathrm{cell}(w_a[j])) \in [-3,3]$：两个"格号"之差。
+    \end{itemize}
+    \column{0.41\textwidth}
+    \begin{exampleblock}{直觉}
+      \small $h[j]$ 回答："$w[j]$ 和 $w_a[j]$ 差了几个 682？"
+      差 0 格 → $h=0$；差 3 格 → $h=3$。\\[0.3em]
+      它是 $w-w_a$ 的\textbf{粗刻度}。
+    \end{exampleblock}
+  \end{columns}
+  \vspace{0.2em}
+  \begin{block}{问题：$w - w_a$ 里有什么？}
+    \small 签名侧 $w_a = w - z_2 + b_0*c_{\mathrm{signed}}$（+行 0 的 $b$ 修正）。
+    表面看 $z_2, b_0$ 全是秘密——但展开 $z_2 = y_2 + e*c_{\mathrm{signed}}$……
+  \end{block}
+\end{frame}
+
+\begin{frame}{魔法时刻：$y_2$ 的精确抵消}
+  \begin{columns}[T]
+    \column{0.62\textwidth}
+    {\small
+    $w = \mathrm{base} + y_2$，\quad $z_2 = y_2 + e*c_{\mathrm{signed}}$
+    \begin{align*}
+      w - w_a &= z_2 - b_0*c_{\mathrm{signed}} - (\text{行 0 } b\text{ 项})\\
+              &= y_2 + e*c - b_0*c - (\text{行 0 } b\text{ 项})\\
+              &= y_2 - \underbrace{(b_0 - e)*c_{\mathrm{signed}}}_{R*c_{\mathrm{signed}}}
+                 - (\text{行 0 } b\text{ 项})
+    \end{align*}}
+    \column{0.34\textwidth}
+    \begin{alertblock}{抵消}
+      \small $y_2$ 在 $w$ 与 $z_2$ 中各出现一次，\\
+      相减后\textbf{精确消失}。
+    \end{alertblock}
+  \end{columns}
+  \vspace{0.3em}
+  \begin{block}{读出}
+    \small 公开的 $h[j]$ 粗刻度地量出
+    $y_2[j] - (R*c_{\mathrm{signed}})[j]$：\\[0.2em]
+    $\bullet$ $y_2$：已知密度的新鲜噪声（三角分布，$\pm2047$）\\
+    $\bullet$ $(R*c)[j]$：\textbf{等价私钥全部未知量} $R=b_0-e$ 的线性投影\\[0.2em]
+    即 $\mathbb{E}[h\,|\,a] \approx -a/\gamma_2$——
+    MC 测得斜率 $-1.483\times10^{-3}$ vs 理论 $-1.466\times10^{-3}$。
+  \end{block}
+\end{frame}
+
+\begin{frame}{把 4 百万次观测排成一列：对齐累加}
+  \begin{itemize}
+    \item 每签名 30 个挑战位置、3 行 hint：按负循环伴随结构对齐——
+          \[
+            \Phi_R[i][m] = \sum_{n,t}\ \hat\varepsilon_n\ \mathrm{flip}\cdot
+            h_n\bigl[(m+p_{n,t}) \bmod d\bigr]
+          \]
+    \item 信号项：$-\kappa s M R_i[m]/\gamma_2$（$M=N\tau$；$10^6$ 签名时
+          每单位 $R$ 的 $z\approx6$--$7$，17 个可能取值全部可分）。
+  \end{itemize}
+  \begin{alertblock}{但是——直接分类失败（~5\%）}
+    \small 残差是 iid 预测的 \textbf{23--37 倍}，自相关 0.88--0.98：
+    一个巨大的确定性结构压在信号上。$z_1$ 的故事重演？
+    \textbf{不——这次结构有精确的解析形式。}
+  \end{alertblock}
+\end{frame}
+
+\begin{frame}{场定律：随机游走 + tent 核}
+  \begin{columns}[T]
+    \column{0.56\textwidth}
+    \small
+    $\varepsilon$-对齐把 $c_{\mathrm{signed}}=\varepsilon c_{\mathrm{can}}$
+    里的 $\varepsilon$ 消掉，剩下\textbf{$\varepsilon$-自由卷积}
+    \[
+      a_0[j] = \textstyle\sum_t (\pm)\,R[(j-p_t)\bmod d]
+    \]
+    其对均匀挑战位置的期望
+    \[
+      \mathbb{E}[a_0[j]] = \frac{\tau}{d}\bigl(2\,\mathrm{CumR}[j]-\Sigma R\bigr)
+    \]
+    ——$R$ 的前缀和＝\textbf{随机游走}。实测逐位置场与该式 corr 0.989。
+    \column{0.40\textwidth}
+    \begin{exampleblock}{传播到 $\Phi$}
+      \small $\mathbb{E}[\Phi[m]] = -\frac{1}{\gamma_2}\bigl[M R[m] +
+      \beta (KR)[m]\bigr] + \cdots$\\[0.2em]
+      $K[m,v] = d - 2|m-v|$（tent 核）\\
+      $\beta = N\tau(\tau-1)/d^2 = 1.33\times10^4$
+    \end{exampleblock}
+  \end{columns}
+  \vspace{0.25em}
+  \begin{block}{最重要的一句话}
+    \small 场预测与实测残差 corr 0.967--0.997。
+    \textbf{场不是噪声，是 $R$ 的已知线性泛函}——每个系数都只含公开常数。
+    \textcolor{ravbronze}{已知线性泛函 = 可以求逆。}
+  \end{block}
+\end{frame}
+
+\begin{frame}{算子求逆：把"染色"洗掉}
+  \begin{itemize}
+    \item 解 $\bigl(sM\,\mathbb{I} + N F_{\mathrm{op}}\bigr)\hat R
+          = -\gamma_2\,\Phi + \text{行 0 修正}$；
+          $F_{\mathrm{op}}$ 用 15 万次互斥位置抽取精确校准（与解析 tent 相关 0.9911）。
+    \item \textbf{逐行标度}：信号尺度 $s$ 逐行不同，按行用整数聚类目标
+          $\frac1d\sum\cos(2\pi\hat R)$ 拟合。
+    \item \textbf{全解一致性 razor}：$A_0 s_0 \equiv 16b_1 + R \pmod q$ 的解对
+          $R$ 的任何错误全局敏感——枚举少量修正，只接受使
+          $\mathrm{nbad}=0$（$s_0$ 全落 $\{-1,0,1\}$）的那些。
+  \end{itemize}
+  \begin{alertblock}{教训（我们踩过的坑）}
+    \small 贪心修正在多错误场景会先应用"nbad 减一"的垃圾修正，毁掉本可一次闭合的
+    局面；裕度窗口会\textbf{漏掉}真正跨界的坐标。只信 $\mathrm{nbad}=0$。
+  \end{alertblock}
+\end{frame}
+
+\begin{frame}{结果 I：oracle 臂（$10^6$ 签名，完美标签）}
+  \begin{columns}[T]
+    \column{0.58\textwidth}
+    \begin{itemize}
+      \item 直接分类 \textbf{99.87\%}（1/768 错：坐标 $(2,122)$，
+            $\hat R = 0.555$ vs 真值 0）。
+      \item 单修正 $(634,-1)$ 闭合：
+            \textbf{$s_0$ 768/768 逐系数精确}。
+      \item 等价私钥 $(\hat e,\hat b_0)$：$\hat e$ 非零 26 坐标。
+    \end{itemize}
+    \column{0.38\textwidth}
+    \begin{exampleblock}{交叉印证}
+      \small 与阶段 E（完全不同的早期代码路径）写的 oracle 密钥
+      \textbf{逐字节一致}。
+    \end{exampleblock}
+  \end{columns}
+  \vspace{0.3em}
+  \begin{block}{机制验证完成}
+    \small hint 通道确实携带密钥——剩下的只是把"完美标签"换成"公开标签"。
+  \end{block}
+\end{frame}
+
+\begin{frame}{结果 II：attack 臂（$10^6$，公开标签 96.2\%）}
+  \begin{itemize}
+    \item 逐行标度拟合 $s = 0.934/0.932/0.938$（聚类目标峰清晰）。
+    \item 直接分类 \textbf{99.09\%}（7/768 错），残差 $\sigma\approx0.184$。
+  \end{itemize}
+  \begin{columns}[T]
+    \column{0.5\textwidth}
+    \begin{block}{残差是什么？}
+      \small iid 噪声地板（置换对照）$\sigma\approx0.154$；
+      e-场假设被数据否定（$\mathrm{corr}(\text{残差},e_{\mathrm{true}})
+      = 0.13/-0.01/0.02$）。\\
+      $\Rightarrow$ 7 个错误 = 噪声跨取整边界的纯随机事件（预期 $\approx6$）。
+    \end{block}
+    \column{0.46\textwidth}
+    \begin{alertblock}{接下来顺理成章}
+      \small iid 部分随 $N^{-1/2}$ 收缩：\\
+      $\sigma(N)\approx\sqrt{(0.154\sqrt{10^6/N})^2+0.10^2}$\\[0.2em]
+      $N=4\times10^6 \Rightarrow \sigma\approx0.10$--$0.13$
+      $\Rightarrow$ 预期跨界错误 $\approx 0.03$ 个。\\
+      \textcolor{ravbronze}{那就去收集更多签名。}
+    \end{alertblock}
+  \end{columns}
+\end{frame}
+
+\begin{frame}{结果 III：$N=4\times10^6$ —— 零错误闭合}
+  \begin{columns}[T]
+    \column{0.56\textwidth}
+    \small 同一签名者再收集 $3\times10^6$ 条（参考实现、同键、全新随机性），
+    合并 real-1M：逐行聚类拟合
+    \begin{center}
+    \begin{tabular}{lcccc}
+    \toprule
+    行 & $s_i$ & 目标 & 直接错误 & $\sigma$\\
+    \midrule
+    0 & 0.935 & 0.804 & \textbf{0/256} & 0.098\\
+    1 & 0.932 & 0.806 & \textbf{0/256} & 0.094\\
+    2 & 0.934 & 0.818 & \textbf{0/256} & 0.100\\
+    \bottomrule
+    \end{tabular}
+    \end{center}
+    \column{0.40\textwidth}
+    \begin{alertblock}{零错误}
+      \small 无需任何修正：$R$ 逐系数精确，\\
+      $s_0 = A_0^{-1}(16b_1+R)$ \textbf{768/768 精确}，\\
+      等价私钥写出（$\hat e$ 非零 26——与 oracle 臂相同）。
+    \end{alertblock}
+  \end{columns}
+  \vspace{0.2em}
+  \begin{block}{两条独立路线，同一把钥匙}
+    \small oracle 臂、attack 臂、以及复现的 $z_1$ 回归路线——
+    恢复的等价私钥\textbf{逐字节一致}。
+  \end{block}
+\end{frame}
+
+\begin{frame}{伪造闭环：原始 C 签名器 + 原始验证器}
+  \begin{exampleblock}{forge\_all（密钥来自纯公开数据管线）}
+    \small
+    \texttt{FORGE SUMMARY: 20/20 forged signatures accepted by ORIGINAL verifier}\\
+    \texttt{[control] tampered z0 / z1 / h byte -> REJECT；different message -> REJECT}\\
+    \texttt{CONTROL SUMMARY: all 4 negative controls REJECTED}
+  \end{exampleblock}
+  \begin{itemize}
+    \item 签名与验证都是\textbf{未修改的参考实现}；消息全新（训练集之外）。
+    \item 内部重试 0--19 次，与正常签名一致——伪造签名在签名器内部不可区分。
+    \item 攻击者视角：收集 $4\times10^6$ 签名 → 恢复等价签名钥 → 任意伪造。
+  \end{itemize}
+  \begin{center}
+    {\color{ravbronze}\rule{0.5\textwidth}{1pt}}\\
+    {\small 公开数据、无侧信道、无插桩——端到端完成。}
+  \end{center}
+\end{frame}
+
+\begin{frame}{保证正确：七项独立交叉验证（全部通过）}
+  \small
+  \begin{enumerate}
+    \item \textbf{独立代数路径}：FFT $[x,-x]$ 实现负循环积，$R=b_0-e$ 精确。
+    \item \textbf{X1 密钥同一性}：阶段 E oracle 密钥 $=$ hint oracle 密钥
+          $=$ hint attack 密钥（三路 SHA-256 一致）。
+    \item \textbf{X2 复现}：换用 real$+$sim1m（$N=2\times10^6$，不含 sim3m）
+          独立重跑——\textbf{同样零错误}，密钥逐字节一致。
+    \item \textbf{X4 恒等式}：$A_0\hat s_0+\hat e-16b_1-\hat b_0\equiv0\pmod q$
+          （FFT 路径），$\hat s_0$ 与真钥一致。
+    \item \textbf{X5 分块无关}：累加器 25k/50k 分块逐元素一致。
+    \item \textbf{X6 跨数据集}：real-1M 与 sim3m 各自独立拟合的 $\hat R$
+          逐坐标一致 761/768（不一致的恰是 1M 时的 7 个噪声跨界），corr 0.999。
+    \item \textbf{X3 管线完整性}：sim3m 全部 300 万条签名经原始验证器重验证零失败；
+          \textbf{X8}：独立复现 $z_1$ 回归路线，同一把等价私钥。
+  \end{enumerate}
+  \begin{center}
+    {\color{ravbronze}\small 信任，但要用七种不同的方式验证。}
+  \end{center}
+\end{frame}
+
+\begin{frame}{与外部世界对表}
+  \begin{itemize}
+    \item \textbf{同期的独立分析}提出了基于 $z_1$ 回归的同族路线。
+          本工作\textbf{独立见证并已完整复现该路线}（RMSE 0.1842@200k vs 原文
+          0.1863；闭合后同一把等价私钥）；\textbf{我们的路线不同}：
+          hint 通道（tent 场算子求逆），$4\times10^6$ 零错误闭合。
+        \item \textbf{ePrint 2013/383}（Ducas 等）：双峰 Fiat--Shamir 的奠基。
+          \textbf{ePrint 2017/505}（Espitau 等，CCS 2017）：BLISS 双峰拒绝
+          采样的缓存侧信道 + EM——\textbf{需要运行时泄露}；我们的路线
+          \textbf{纯公开数据}。
+  \end{itemize}
+\end{frame}
+
+\begin{frame}{怎么修：给拉文克劳的三个方案}
+  \begin{enumerate}
+    \item \textbf{别再共享符号位}：每次签名（甚至每坐标）独立掷
+          $\varepsilon$——同时掐断 $z_0$ 标签与 hint 的 $\varepsilon$-对齐前提。
+    \item \textbf{加宽 $z_0$ 掩码}：$\gamma_{1,0}=8$ 的支撑错位太"好读"；
+          加宽可稀释标签（但 hint 的 $a$ 观测不受此影响——单修不够）。
+    \item \textbf{重审 hint 论证式}："$w-z_2+b_0*c$" 让掩码抵消、秘密一阶线性
+          进入公开值。任何"验证器可重算 + 一次一密桥接"的设计都要按
+          \textbf{响应-秘密的独立性与可逆性}重审。
+  \end{enumerate}
+  \begin{center}
+    {\color{ravbronze}\small 最好的防御者，是知道攻击者如何思考的人。}
+  \end{center}
+\end{frame}
+
+\begin{frame}{方法论：拉文克劳的四条家规}
+  \begin{enumerate}
+    \item \textbf{预注册阈值}：判决阈值在看到数据前由公开常数合成——
+          不给"调参到收口"留门。
+    \item \textbf{三臂对照}：oracle / attack / shuffled（打乱标签必须塌回基线）。
+    \item \textbf{三级证据}：纯数学推导 / 理想化模型 / 真实 C 闭环——
+          每个数字标注属于哪一级。
+    \item \textbf{交叉验证}：不同数据集组合、不同代码路径、不同轮次——
+          同一结论要能被独立地重新得到。
+  \end{enumerate}
+  \begin{exampleblock}{否定结果与更正也是资产}
+    \small $\psi$ 统计量伪象已更正、ICM 发散、EM 不可辨识、e-场被否——
+    "此路不通"砍掉一半搜索空间；$z_1$ 回归路线的独立复现又为两条路线提供交叉见证。
+  \end{exampleblock}
+\end{frame}
+
+\begin{frame}{总结：一条推理之路}
+  \begin{center}
+    \begin{tikzpicture}[node distance=0.42cm,
+        every node/.style={align=center,font=\scriptsize},
+        box/.style={draw=ravblue,fill=ravgrey,rounded corners=2pt,
+                    inner sep=4pt,text width=3.4cm},
+        arr/.style={-{Stealth},ravbronze,thick}]
+      \node[box] (a) {窄 $z_0$ 支撑错位\\$\to$ 96.2\% 双峰标签};
+      \node[box,right=of a] (b) {hint 论证式\\$y_2$ 精确抵消\\$\to$ $R$ 一阶观测};
+      \node[box,right=of b] (c) {$\varepsilon$-自由卷积期望\\$\to$ tent 算子\\（场 $=$ 可求逆）};
+      \node[box,below=of c] (d) {算子求逆 $+$ 逐行标度\\$N=4\times10^6$ 零错误};
+      \node[box,left=of d] (e) {$s_0 = A_0^{-1}(16b_1{+}R)$\\768/768 精确};
+      \node[box,left=of e] (f) {等价私钥\\伪造 20/20 通过\\原始验证器};
+      \draw[arr] (a)--(b); \draw[arr] (b)--(c);
+      \draw[arr] (c)--(d); \draw[arr] (d)--(e); \draw[arr] (e)--(f);
+    \end{tikzpicture}
+  \end{center}
+  \vspace{0.2em}
+  \begin{itemize}
+    \item 规范的"独立于 $b$"在联合分布上失效；公开数据足以完全攻破 BiT-128。
+    \item 两条独立路线（$z_1$ 回归与 hint 算子）恢复同一把等价私钥。
+    \item 全部数字可复现：种子、脚本、产物清单见技术报告与 GitHub 仓库。
+  \end{itemize}
+\end{frame}
+
+\begin{frame}
+  \begin{center}
+    \vspace{0.6em}
+    \diadem\\[0.6em]
+    {\Large\color{ravblue}\textbf{问题与讨论}}\\[0.8em]
+    {\color{ravbronze}\motto}\\[0.6em]
+    {\scriptsize\color{ravlight}
+     技术报告：\texttt{BiT128\_attack\_report.pdf}（安全漏洞研究/reports/latex/）\\
+     全部实验产物与代码：\texttt{BiT128\_public\_data\_attack/}（GitHub 仓库）}
+  \end{center}
+\end{frame}
+
+\end{document}

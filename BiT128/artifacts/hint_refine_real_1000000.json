@@ -1,0 +1,58 @@
+{
+ "corr_Fop_tent": 0.9910838599724521,
+ "results": {
+  "tent_oracle": {
+   "direct_acc": 0.5924479166666666,
+   "direct_n_wrong": 313,
+   "icm_acc": 0.5911458333333334,
+   "icm_n_wrong": 314,
+   "icm_iters": [
+    3,
+    7,
+    7
+   ],
+   "resid_std_direct": 0.5271854953807296
+  },
+  "tent_attack": {
+   "direct_acc": 0.3841145833333333,
+   "direct_n_wrong": 473,
+   "icm_acc": 0.3880208333333333,
+   "icm_n_wrong": 470,
+   "icm_iters": [
+    5,
+    6,
+    2
+   ],
+   "resid_std_direct": 0.8278220730888219
+  },
+  "mc_oracle": {
+   "direct_acc": 0.99609375,
+   "direct_n_wrong": 3,
+   "icm_acc": 0.98828125,
+   "icm_n_wrong": 9,
+   "icm_iters": [
+    3,
+    1,
+    1
+   ],
+   "resid_std_direct": 0.18563754847820826,
+   "corr_resid_Ke_rowwise": [
+    -0.09666355763886501,
+    -0.08237200847119304,
+    -0.007519918331014647
+   ]
+  },
+  "mc_attack": {
+   "direct_acc": 0.7799479166666666,
+   "direct_n_wrong": 169,
+   "icm_acc": 0.7838541666666666,
+   "icm_n_wrong": 166,
+   "icm_iters": [
+    6,
+    3,
+    2
+   ],
+   "resid_std_direct": 0.38994161400419597
+  }
+ }
+}

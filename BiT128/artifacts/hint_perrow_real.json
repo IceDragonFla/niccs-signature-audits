@@ -1,0 +1,14 @@
+{
+ "data": "real",
+ "s_row": [
+  0.935,
+  0.932,
+  0.934
+ ],
+ "stage_log": [],
+ "nbad_final": 0,
+ "s0_match": 768,
+ "s0_exact": true,
+ "key_written": true,
+ "e_hat_nonzero": 26
+}

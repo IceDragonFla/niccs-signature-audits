@@ -1,0 +1,5 @@
+LLL 322.8s ||b1||=172.5 target ||s0||=13.38
+Traceback (most recent call last):
+  File "./prog_bkz.py", line 59, in <module>
+    nxt=cur.clone()
+AttributeError: 'fpylll.fplll.integer_matrix.IntegerMatrix' object has no attribute 'clone'
