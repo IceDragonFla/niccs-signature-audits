@@ -1,0 +1,30 @@
+cff-version: 1.2.0
+message: >-
+  If you use this repository, its code, or its reports, please cite
+  as below (per-scheme BibTeX entries in CITATION.bib). Code is
+  licensed MIT; reports and documentation CC BY 4.0.
+title: 'Public-Data Key-Recovery Studies of Five NICCS First-Round Signature Candidates'
+abstract: >-
+  Independent cryptanalysis of five NICCS first-round lattice signature
+  candidates: full public-data key recovery and forgery for BiT-128 and
+  DARTS-128; an implementation-level transition-direction reversal with
+  exact recovery of gamma and an algebraic endgame reduction for Shuttle;
+  and quantified learning-attack barriers for CS-128 and COMPASS-SIG-128.
+authors:
+  - family-names: Liu
+    given-names: JY
+  - family-names: Max
+    given-names: GLM-5.3
+repository-code: 'https://github.com/IceDragonFla/niccs-signature-audits'
+type: software
+keywords:
+  - lattice-cryptography
+  - cryptanalysis
+  - key-recovery
+  - post-quantum
+  - digital-signatures
+license:
+  - MIT
+  - CC-BY-4.0
+version: 1.0.0
+date-released: '2026-10-19'

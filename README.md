@@ -65,9 +65,11 @@ z₁ 饱和伪象、CS 的移位 UB 误报、Shuttle 的早期线性求解假象
 
 ## 引用
 
-各方案的技术报告（LaTeX 源码与 PDF）在 BiT128/paper/、DARTS128/ 与
-Shuttle/docs/。若使用本仓库的框架或结论，请引用对应报告；框架的架构
-说明见 umodel/ARCHITECTURE_v17v18.md 与 umodel/ 内各模块的入口文档。
+本仓库的 BibTeX 条目在 [CITATION.bib](CITATION.bib)（仓库总条目 + 五份报告
+各一条，报告条目直接链接对应 PDF）；GitHub 页面右侧 "Cite this repository"
+按钮由 [CITATION.cff](CITATION.cff) 生成。各方案的技术报告（LaTeX 源码与
+PDF）在 BiT128/paper/、DARTS128/ 与 Shuttle/docs/；框架的架构说明见
+umodel/ARCHITECTURE_v17v18.md 与 umodel/ 内各模块的入口文档。
 
 ## 许可
 

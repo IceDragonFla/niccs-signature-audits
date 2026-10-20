@@ -1,0 +1,78 @@
+% 引用本仓库或其中单份报告时，请选取相应条目。
+% 作者：JY Liu、GLM-5.3 Max。许可：代码 MIT；报告与文档 CC BY 4.0。
+% 各报告条目的 note 给出该报告在仓库中的位置（PDF）。
+
+@misc{niccs-signature-audits,
+  author       = {{JY Liu} and {GLM-5.3 Max}},
+  title        = {Public-Data Key-Recovery Studies of Five {NICCS} First-Round Signature Candidates},
+  year         = {2026},
+  month        = oct,
+  howpublished = {\url{https://github.com/IceDragonFla/niccs-signature-audits}},
+  keywords     = {lattice-cryptography, cryptanalysis, key-recovery, post-quantum, digital-signatures},
+  note         = {BiT-128 / DARTS-128 / Shuttle / CS-128 / COMPASS-SIG-128; code under MIT, reports under CC BY 4.0}
+}
+
+@techreport{bit128-recovery,
+  author      = {{JY Liu} and {GLM-5.3 Max}},
+  title       = {{BiT-128} 公开数据等价私钥恢复：{hint} 通道的算子求逆
+                 ({BiT-128} Public-Data Equivalent-Key Recovery via the Hint-Channel Operator Inversion)},
+  institution = {NICCS signature-audit repository},
+  year        = {2026},
+  month       = oct,
+  type        = {technical report},
+  number      = {BiT128},
+  url         = {https://github.com/IceDragonFla/niccs-signature-audits/blob/main/BiT128/REPORT.pdf},
+  note        = {4M signatures, s0 exact 768/768, forgeries 20/20}
+}
+
+@techreport{darts128-recovery,
+  author      = {{JY Liu} and {GLM-5.3 Max}},
+  title       = {{DARTS-128}（1--2b 模式）密钥恢复：公开可重放的双分支判定与 {hint} 通道
+                 ({DARTS-128} Key Recovery via Publicly Replayable Dual-Branch Decisions)},
+  institution = {NICCS signature-audit repository},
+  year        = {2026},
+  month       = oct,
+  type        = {technical report},
+  number      = {DARTS128},
+  url         = {https://github.com/IceDragonFla/niccs-signature-audits/blob/main/DARTS128/REPORT.pdf},
+  note        = {Full (s0,s1,e) exact, 1536 bytes; forgeries 20/20; full 14-page report in same directory}
+}
+
+@techreport{shuttle-recovery,
+  author      = {{JY Liu} and {GLM-5.3 Max}},
+  title       = {{Shuttle} 密钥恢复研究：转移方向反转、{γ} 的精确恢复与提升方程
+                 ({Shuttle} Key-Recovery Study: Transition-Direction Reversal, Exact Recovery of γ, and the Lifting Equation)},
+  institution = {NICCS signature-audit repository},
+  year        = {2026},
+  month       = oct,
+  type        = {technical report},
+  number      = {Shuttle},
+  url         = {https://github.com/IceDragonFla/niccs-signature-audits/blob/main/Shuttle/REPORT.pdf},
+  note        = {850-signature 5-sigma distinguisher; gamma exact via 342M signatures; endgame reduced to dim-256 twisted uSVP, gap approx. 1.01}
+}
+
+@techreport{cs128-barrier,
+  author      = {{JY Liu} and {GLM-5.3 Max}},
+  title       = {{CS-128} 学习型密钥恢复的量化壁垒：对称接受采样下的信息测定
+                 ({CS-128}: Quantifying the Learning-Attack Barrier under Symmetric Rejection Sampling)},
+  institution = {NICCS signature-audit repository},
+  year        = {2026},
+  month       = oct,
+  type        = {technical report},
+  number      = {CS128},
+  url         = {https://github.com/IceDragonFla/niccs-signature-audits/blob/main/CS128/REPORT.pdf},
+  note        = {Exact-model LLR +0.180 nats/signature; Bayes-optimal classifier needs ~2e6 signatures, practical ~3e8}
+}
+
+@techreport{compass128-zero-signal,
+  author      = {{JY Liu} and {GLM-5.3 Max}},
+  title       = {{COMPASS-SIG-128}：被接受条件化消除的回归信号
+                 ({COMPASS-SIG-128}: Regression Signal Eliminated by Acceptance Conditioning)},
+  institution = {NICCS signature-audit repository},
+  year        = {2026},
+  month       = oct,
+  type        = {technical report},
+  number      = {COMPASS128},
+  url         = {https://github.com/IceDragonFla/niccs-signature-audits/blob/main/COMPASS128/REPORT.pdf},
+  note        = {Variance law holds at all scales while correlation is identically zero; w1 consistency check conditions the published distribution}
+}
