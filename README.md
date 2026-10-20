@@ -68,3 +68,10 @@ z₁ 饱和伪象、CS 的移位 UB 误报、Shuttle 的早期线性求解假象
 各方案的技术报告（LaTeX 源码与 PDF）在 BiT128/paper/、DARTS128/ 与
 Shuttle/docs/。若使用本仓库的框架或结论，请引用对应报告；框架的架构
 说明见 umodel/ARCHITECTURE_v17v18.md 与 umodel/ 内各模块的入口文档。
+
+## 许可
+
+双许可：**代码**（code/、umodel/、supplementary/ 下的脚本）按
+[LICENSE](LICENSE)（MIT）授权；**报告与文档**（各 REPORT、README、docs/、
+paper/）按 [LICENSE-DOCS](LICENSE-DOCS)（CC BY 4.0）授权。引用时请署名
+JY Liu 与 GLM-5.3 Max。
